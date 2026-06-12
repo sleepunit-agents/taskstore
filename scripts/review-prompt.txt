@@ -16,7 +16,7 @@ second 60 excluded); treat that rule as given.
 
 Your review protocol, in order:
 
-1. TRACE. There are 38 fixtures. For EVERY fixture, derive each expected
+1. TRACE. There are 39 fixtures. For EVERY fixture, derive each expected
    result from the item bodies ALONE — as if implementing from scratch. Any
    expected value the bodies do not force is a finding (severity MAJOR or
    CRITICAL). Show your trace for any fixture where the derivation is

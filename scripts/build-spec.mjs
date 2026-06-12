@@ -85,7 +85,7 @@ Ids are opaque strings, unique within one store against every id it has ever hel
 
 Timestamps: every at-valued field is an RFC 3339 date-time, parseable exactly as felag-core it-verification's Timestamps rule defines (numeric offset or Z required, T and Z case-insensitive, second 60 excluded) — that rule is incorporated by reference, not restated. A required timestamp field that is absent or not a string is E_MISSING_FIELD; a string that does not parse is E_BAD_TIMESTAMP. Accepted timestamps are stored and returned VERBATIM: this contract never normalizes to UTC and never orders anything by timestamp value — every ordering it defines is submission or creation order — so offset spelling can never change observable output beyond the verbatim field itself.
 
-Results are envelopes with exact key sets. Every result carries ok (boolean) and errors (array); create adds created and id; show adds task; list, ready, and report add entries; export adds tasks and links; import adds imported. On error the payload fields hold neutral values: id null, created false, task null, entries [], tasks [], links [], imported 0. errors is a sorted set — ascending code-point order, deduplicated — and validation is all-applicable, never short-circuiting: every well-posed check reports its code. Well-posedness: field-validity checks (presence, type, vocabulary, timestamp parse) and referent-existence checks are always well-posed and co-fire; checks that interrogate an existing referent — transition legality, cycle detection, parent uniqueness, duplicate-link detection, linkage idempotency — are gated ONLY by what they interrogate: each evaluates whenever its referents exist (and, for link's graph checks, whenever the type names a known graph), and CO-FIRES with any field errors elsewhere in the command. An unparseable at never suppresses E_BAD_TRANSITION on a known referent; an unknown referent suppresses exactly the checks that needed it. A command reporting any error changes nothing: per-command atomicity. Field-validity rules shared by every command: a required field absent or not of its declared type is E_MISSING_FIELD; an optional field present but not of its declared type is E_BAD_FIELD, except type (E_BAD_TYPE) and priority (E_BAD_PRIORITY), which carry their own codes wherever they appear. Error codes at 0.1.0: E_BAD_FIELD, E_BAD_PRIORITY, E_BAD_TIMESTAMP, E_BAD_TRANSITION, E_BAD_TYPE, E_CYCLE, E_DUP_ID, E_DUP_LINKAGE, E_HAS_PARENT, E_MISSING_FIELD, E_UNKNOWN_ID.
+Results are envelopes with exact key sets. Every result carries ok (boolean) and errors (array); create adds created and id; show adds task; list, ready, and report add entries; export adds tasks and links; import adds imported. On error the payload fields hold neutral values: id null, created false, task null, entries [], imported 0 (export takes no arguments and cannot error, so tasks and links have no error case). errors is a sorted set — ascending code-point order, deduplicated — and validation is all-applicable, never short-circuiting: every well-posed check reports its code. Well-posedness: field-validity checks (presence, type, vocabulary, timestamp parse) are always well-posed and co-fire. Referent-existence checks are well-posed over STRING-valued referent fields only, and then co-fire: a referent field that fails its type check reports its type error (E_BAD_FIELD, or E_MISSING_FIELD when required) alone — no existence lookup happens on a non-string, so a numeric parent never adds E_UNKNOWN_ID. Checks that interrogate an existing referent — transition legality, cycle detection, parent uniqueness, duplicate-link detection, linkage idempotency — are gated ONLY by what they interrogate: each evaluates whenever its referents exist (and, for link's graph checks, whenever the type names a known graph), and CO-FIRES with any field errors elsewhere in the command. An unparseable at never suppresses E_BAD_TRANSITION on a known referent; an unknown referent suppresses exactly the checks that needed it. A command reporting any error changes nothing: per-command atomicity. Field-validity rules shared by every command: a required field absent or not of its declared type is E_MISSING_FIELD; an optional field present but not of its declared type is E_BAD_FIELD, except type (E_BAD_TYPE) and priority (E_BAD_PRIORITY), which carry their own codes wherever they appear. Error codes at 0.1.0: E_BAD_FIELD, E_BAD_PRIORITY, E_BAD_TIMESTAMP, E_BAD_TRANSITION, E_BAD_TYPE, E_CYCLE, E_DUP_ID, E_DUP_LINKAGE, E_HAS_PARENT, E_MISSING_FIELD, E_UNKNOWN_ID.
 
 The store holds work tracking only: memory, knowledge, and identity live in the owner's memory layer, and this contract deliberately offers no surface for them — the boundary that is not enforced is the boundary that erodes (see the exclusions and ac-ts-loom-boundary).`,
   {
@@ -134,7 +134,7 @@ Defaults and vocabulary: type defaults to task; the vocabulary is task | bug | f
 
 A successful create stores the task with status open, createdAt = at (verbatim), createdBy = actor, the given fields, and a fresh id (created true). parent, when present, must name a held task (else E_UNKNOWN_ID, co-firing with any field errors); on success the parent-child edge (id depends on parent) is created atomically with the task, exactly as if link had run — a fresh task has no prior parent and cannot complete a cycle, so no link-side code can arise. legacyRef is preserved verbatim wherever the task renders (show, export).
 
-Spec linkage: specItemRef (by convention 'spec:<specName>/<itemId>') with optional criterionId. criterionId without specItemRef is E_MISSING_FIELD. Linkage idempotency — the c-tasks rule, native: tasks are keyed on (specItemRef, criterionId), absent criterionId a distinct key value. A field-valid create whose linkage key is already held returns ok true, created false, and the EXISTING task's id, whatever that task's status — open, claimed, or closed — and changes nothing: the new title and every other field of the proposal are discarded. Creates with no specItemRef carry no key and never collide. Distinct criterionIds under one specItemRef are distinct tasks.`,
+Spec linkage: specItemRef (by convention 'spec:<specName>/<itemId>') with optional criterionId. criterionId without specItemRef is E_MISSING_FIELD. Linkage idempotency — the c-tasks rule, native: tasks are keyed on (specItemRef, criterionId), absent criterionId a distinct key value. VALIDATION PRECEDES IDEMPOTENCY: a create reporting any error — field or referent, an unknown parent included — does nothing and returns the error envelope (id null), even when its linkage key is held. A create that validates clean and whose key is already held is a HIT: it returns ok true, created false, and the EXISTING task's id, whatever that task's status — open, claimed, or closed — and changes nothing: the title, the parent (no edge is created), and every other field of the proposal are discarded whole. Creates with no specItemRef carry no key and never collide. Distinct criterionIds under one specItemRef are distinct tasks.`,
 );
 
 must(
@@ -152,14 +152,14 @@ must(
 must(
   "ac-ts-create-validate",
   "it-ts-create",
-  "Given creates carrying a present-but-mistyped required field (a numeric title; a numeric at), a criterionId without specItemRef, mistyped optional fields, priorities of -1 and \"high\", and a boundary priority 4\nWhen they run\nThen the mistyped required fields and the lone criterionId report E_MISSING_FIELD, the mistyped optionals report E_BAD_FIELD, the bad priorities report E_BAD_PRIORITY, the boundary 4 is accepted, and nothing failed is created",
+  "Given creates with actor absent or numeric, a present-but-mistyped required field (a numeric title; a numeric at), a criterionId without specItemRef, mistyped optional fields (parent, legacyRef, specItemRef, criterionId), priorities of -1 and \"high\", and a boundary priority 4\nWhen they run\nThen the absent or mistyped required fields and the lone criterionId report E_MISSING_FIELD (co-firing with other field errors), mistyped optionals report E_BAD_FIELD with NO existence lookup on a non-string referent, the bad priorities report E_BAD_PRIORITY, the boundary 4 is accepted, and nothing failed is created",
   ["fx-create-invalid"],
 );
 must(
   "ac-ts-linkage-idempotent",
   "it-ts-create",
-  "Given a task held for (specItemRef, criterionId)\nWhen the same key is created again — before and after the task is closed — with a different title\nThen each re-create returns ok with created false and the existing id, whatever the status, the holder's own fields survive (the colliding proposal is discarded), and report still lists exactly one entry for that key",
-  ["fx-linkage-idempotent"],
+  "Given tasks held for a (specItemRef, criterionId) key in each status — open, in_progress, closed\nWhen the same key is created again with a different title, with a known parent, and with an unknown parent\nThen the clean re-creates return ok with created false and the existing id whatever the status, the holder's fields survive and NO parent edge is created (the colliding proposal is discarded whole), the unknown-parent create fails E_UNKNOWN_ID with id null (validation precedes idempotency), and report still lists exactly one entry per key",
+  ["fx-linkage-idempotent", "fx-linkage-parent"],
 );
 must(
   "ac-ts-linkage-distinct",
@@ -454,14 +454,18 @@ fx(
 
 fx(
   "fx-timestamp-verbatim",
-  "An accepted non-Z offset timestamp is stored and returned verbatim, never normalized to UTC.",
+  "An accepted non-Z offset timestamp and lowercase t/z designators are stored and returned verbatim, never normalized or upcased.",
   [
     { op: "create", actor: A, at: "2026-06-12T13:00:00-05:00", title: "offset task" },
     { op: "show", id: "$1" },
+    { op: "create", actor: A, at: "2026-06-12t20:00:00z", title: "lowercase designators" },
+    { op: "show", id: "$2" },
   ],
   [
     createOK("$1"),
     showOK(task({ createdAt: "2026-06-12T13:00:00-05:00", id: "$1", title: "offset task" })),
+    createOK("$2"),
+    showOK(task({ createdAt: "2026-06-12t20:00:00z", id: "$2", title: "lowercase designators" })),
   ],
 );
 
@@ -537,12 +541,15 @@ fx(
 
 fx(
   "fx-create-invalid",
-  "Present-but-mistyped required fields and a lone criterionId are E_MISSING_FIELD; mistyped optionals are E_BAD_FIELD; -1 and \"high\" are E_BAD_PRIORITY; the boundary priority 4 is accepted.",
+  "Absent and mistyped actor, present-but-mistyped required fields, and a lone criterionId are E_MISSING_FIELD; mistyped optionals are E_BAD_FIELD with no existence lookup on the numeric parent; -1 and \"high\" are E_BAD_PRIORITY; the boundary priority 4 is accepted.",
   [
     { op: "create", actor: A, at: T0, title: 9 },
     { op: "create", actor: A, at: 42, title: "numeric clock" },
+    { op: "create", at: T0, title: "nobody claims this" },
+    { op: "create", actor: 42, at: T0, priority: 9, title: "numeric actor" },
     { op: "create", actor: A, at: T0, criterionId: "ac1", title: "lone criterion" },
     { op: "create", actor: A, at: T0, legacyRef: 7, parent: 42, title: "mistyped optionals" },
+    { op: "create", actor: A, at: T0, criterionId: true, specItemRef: 5, title: "mistyped linkage" },
     { op: "create", actor: A, at: T0, priority: -1, title: "below range" },
     { op: "create", actor: A, at: T0, priority: "high", title: "named priority" },
     { op: "create", actor: A, at: T1, priority: 4, title: "boundary" },
@@ -552,11 +559,51 @@ fx(
     createErr(["E_MISSING_FIELD"]),
     createErr(["E_MISSING_FIELD"]),
     createErr(["E_MISSING_FIELD"]),
+    createErr(["E_BAD_PRIORITY", "E_MISSING_FIELD"]),
+    createErr(["E_MISSING_FIELD"]),
+    createErr(["E_BAD_FIELD"]),
     createErr(["E_BAD_FIELD"]),
     createErr(["E_BAD_PRIORITY"]),
     createErr(["E_BAD_PRIORITY"]),
     createOK("$1"),
     entriesOK([{ id: "$1", priority: 4, status: "open", title: "boundary", type: "task" }]),
+  ],
+);
+
+fx(
+  "fx-linkage-parent",
+  "Validation precedes idempotency: an idempotent hit carrying a known parent creates NO edge and discards the proposal whole — on an in_progress holder — while the same key with an unknown parent fails E_UNKNOWN_ID outright.",
+  [
+    { op: "create", actor: A, at: T0, title: "container", type: "epic" },
+    { op: "create", actor: A, at: T1, criterionId: "ac1", specItemRef: "spec:mini/it1", title: "first" },
+    { op: "claim", actor: A, at: T2, id: "$2" },
+    { op: "create", actor: A, at: T3, criterionId: "ac1", parent: "$1", specItemRef: "spec:mini/it1", title: "replay with parent" },
+    { op: "create", actor: A, at: T4, criterionId: "ac1", parent: "legacy-ghost", specItemRef: "spec:mini/it1", title: "replay with unknown parent" },
+    { op: "show", id: "$2" },
+    { op: "export" },
+  ],
+  [
+    createOK("$1"),
+    createOK("$2"),
+    actOK,
+    createOK("$2", false),
+    createErr(["E_UNKNOWN_ID"]),
+    showOK(
+      task({
+        assignee: A, createdAt: T1, criterionId: "ac1", id: "$2",
+        specItemRef: "spec:mini/it1", startedAt: T2, status: "in_progress", title: "first",
+      }),
+    ),
+    exportOK(
+      [
+        exTask({ id: "$1", title: "container", type: "epic" }),
+        exTask({
+          assignee: A, createdAt: T1, criterionId: "ac1", id: "$2",
+          specItemRef: "spec:mini/it1", startedAt: T2, status: "in_progress", title: "first",
+        }),
+      ],
+      [],
+    ),
   ],
 );
 
@@ -681,6 +728,7 @@ fx(
     { op: "close", actor: A, at: T2, id: "$1", reason: "again" },
     { op: "close", actor: A, at: "2026-06-12T18:00:00", id: "$1", reason: 42 },
     { op: "claim", actor: A, at: T3, id: "$1" },
+    { op: "close", actor: A, at: T4, id: "legacy-ghost" },
     { op: "show", id: "$1" },
   ],
   [
@@ -689,6 +737,7 @@ fx(
     actErr(["E_BAD_TRANSITION"]),
     actErr(["E_BAD_FIELD", "E_BAD_TIMESTAMP", "E_BAD_TRANSITION"]),
     actErr(["E_BAD_TRANSITION"]),
+    actErr(["E_UNKNOWN_ID"]),
     showOK(task({ closeReason: "done", closedAt: T1, id: "$1", status: "closed", title: "once" })),
   ],
 );
@@ -703,6 +752,7 @@ fx(
     { op: "reopen", actor: A, at: T3, id: "$1" },
     { op: "show", id: "$1" },
     { op: "reopen", actor: A, at: T4, id: "$1" },
+    { op: "reopen", actor: A, at: T4, id: "legacy-ghost" },
   ],
   [
     createOK("$1"),
@@ -711,6 +761,7 @@ fx(
     actOK,
     showOK(task({ id: "$1", title: "back again" })),
     actErr(["E_BAD_TRANSITION"]),
+    actErr(["E_UNKNOWN_ID"]),
   ],
 );
 
@@ -950,17 +1001,19 @@ fx(
 
 fx(
   "fx-link-invalid",
-  "Unknown referents report E_UNKNOWN_ID once however many are unknown, co-fired with E_BAD_TYPE for an unknown type; no edge is recorded.",
+  "Unknown referents report E_UNKNOWN_ID once however many are unknown, co-fired with E_BAD_TYPE for an unknown type; a self-link with an offsetless at co-fires E_BAD_TIMESTAMP and E_CYCLE; no edge is recorded.",
   [
     { op: "create", actor: A, at: T0, title: "a" },
     { op: "link", actor: A, at: T1, dependsOn: "legacy-ghost", id: "$1", type: "strangles" },
     { op: "link", actor: A, at: T2, dependsOn: "legacy-also-gone", id: "legacy-gone", type: "blocks" },
+    { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$1", id: "$1", type: "blocks" },
     { op: "export" },
   ],
   [
     createOK("$1"),
     actErr(["E_BAD_TYPE", "E_UNKNOWN_ID"]),
     actErr(["E_UNKNOWN_ID"]),
+    actErr(["E_BAD_TIMESTAMP", "E_CYCLE"]),
     exportOK([exTask({ id: "$1", title: "a" })], []),
   ],
 );
@@ -995,17 +1048,19 @@ fx(
 
 fx(
   "fx-comment-invalid",
-  "A comment naming an unknown id is E_UNKNOWN_ID; a comment missing text is E_MISSING_FIELD; neither records anything.",
+  "A comment naming an unknown id is E_UNKNOWN_ID; a comment missing text is E_MISSING_FIELD; an unparseable at is E_BAD_TIMESTAMP; none records anything.",
   [
     { op: "create", actor: A, at: T0, title: "quiet" },
     { op: "comment", actor: A, at: T1, id: "legacy-ghost", text: "into the void" },
     { op: "comment", actor: A, at: T2, id: "$1" },
+    { op: "comment", actor: A, at: "not a clock", id: "$1", text: "skewed" },
     { op: "show", id: "$1" },
   ],
   [
     createOK("$1"),
     actErr(["E_UNKNOWN_ID"]),
     actErr(["E_MISSING_FIELD"]),
+    actErr(["E_BAD_TIMESTAMP"]),
     showOK(task({ id: "$1", title: "quiet" })),
   ],
 );
@@ -1045,6 +1100,8 @@ fx(
     { op: "update", actor: A, at: T1, id: "$1", set: "priority 0" },
     { op: "update", actor: A, at: T2, id: "$1", set: { status: "closed" } },
     { op: "update", actor: A, at: T3, id: "$1", set: { priority: 7, title: 9 } },
+    { op: "update", actor: A, at: 42, id: "$1", set: { title: "never lands" } },
+    { op: "update", actor: A, at: T4, id: "legacy-ghost", set: { title: "no target" } },
     { op: "show", id: "$1" },
   ],
   [
@@ -1054,6 +1111,8 @@ fx(
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD", "E_BAD_PRIORITY"]),
+    actErr(["E_MISSING_FIELD"]),
+    actErr(["E_UNKNOWN_ID"]),
     showOK(task({ id: "$1", title: "untouched" })),
   ],
 );
@@ -1092,6 +1151,8 @@ fx(
     { op: "close", actor: A, at: T4, id: "$3" },
     { op: "list" },
     { op: "list", status: "open" },
+    { op: "list", status: "in_progress" },
+    { op: "list", status: "closed" },
     { op: "list", status: "done" },
   ],
   [
@@ -1106,6 +1167,8 @@ fx(
       { id: "$3", priority: 2, status: "closed", title: "three", type: "task" },
     ]),
     entriesOK([{ id: "$1", priority: 2, status: "open", title: "one", type: "task" }]),
+    entriesOK([{ id: "$2", priority: 2, status: "in_progress", title: "two", type: "task" }]),
+    entriesOK([{ id: "$3", priority: 2, status: "closed", title: "three", type: "task" }]),
     entriesErr(["E_BAD_FIELD"]),
   ],
 );
@@ -1254,7 +1317,7 @@ fx(
 
 fx(
   "fx-import-invalid",
-  "One import payload violating many rules at once — id collision with a HELD imported id, bad type/status/priority vocabulary, an offsetless stamp, a forbidden parent key, a missing title, and a link from an unknown id — reports every code in one sorted set, imports nothing, and the store holds only what it held.",
+  "One import payload violating many rules at once — id collision with a HELD imported id, within-payload linkage collision, bad type/status/priority vocabulary, an offsetless stamp, a malformed comment, forbidden parent/dependsOn keys, a missing title, a self-link, and a link from an unknown id — reports every code in one sorted set, imports nothing, and the store holds only what it held.",
   [
     {
       op: "import", actor: A, at: T0,
@@ -1267,10 +1330,15 @@ fx(
       tasks: [
         { createdAt: "2026-01-02T00:00:00Z", createdBy: A, id: "legacy-1", priority: 2, status: "open", title: "collides with held", type: "task" },
         { createdAt: "2026-01-03T00:00:00", createdBy: A, id: "legacy-2", priority: 9, status: "paused", title: "bad vocabulary", type: "saga" },
-        { createdAt: "2026-01-04T00:00:00Z", createdBy: A, id: "legacy-3", parent: "legacy-1", priority: 2, status: "open", title: "forbidden edge key", type: "task" },
+        { createdAt: "2026-01-04T00:00:00Z", createdBy: A, dependsOn: ["legacy-1"], id: "legacy-3", parent: "legacy-1", priority: 2, status: "open", title: "forbidden edge keys", type: "task" },
         { createdAt: "2026-01-05T00:00:00Z", createdBy: A, id: "legacy-4", priority: 2, status: "open", type: "task" },
+        { comments: [{ actor: A, at: "2026-01-06T00:00:00", text: "offsetless comment" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-5", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "first of colliding pair", type: "task" },
+        { createdAt: "2026-01-07T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-6", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "second of colliding pair", type: "task" },
       ],
-      links: [{ dependsOn: "legacy-1", id: "legacy-9", type: "blocks" }],
+      links: [
+        { dependsOn: "legacy-1", id: "legacy-9", type: "blocks" },
+        { dependsOn: "legacy-1", id: "legacy-1", type: "blocks" },
+      ],
     },
     { op: "list" },
   ],
@@ -1278,7 +1346,7 @@ fx(
     importOK(1),
     importErr([
       "E_BAD_FIELD", "E_BAD_PRIORITY", "E_BAD_TIMESTAMP", "E_BAD_TYPE",
-      "E_DUP_ID", "E_MISSING_FIELD", "E_UNKNOWN_ID",
+      "E_CYCLE", "E_DUP_ID", "E_DUP_LINKAGE", "E_MISSING_FIELD", "E_UNKNOWN_ID",
     ]),
     entriesOK([{ id: "legacy-1", priority: 2, status: "open", title: "held import", type: "task" }]),
   ],

@@ -230,3 +230,38 @@ Corpus after round 1: 8 items, 35 criteria, 38 fixtures. Implementation
 (written against the draft while the reviewer ran) passed all amended
 fixtures without change — the co-fire semantics it implemented were the
 ones ratified.
+
+## Cold review round 2 — REWORK (2026-06-12)
+
+All 38 traced clean; round-1 discrimination fixes confirmed; no dead
+weight. Three MAJORs:
+
+1. **actor required-ness entirely uncarried** — every mutation in the
+   corpus carried actor: "art"; an actor-optional implementation passed all
+   38. fx-create-invalid now pins absent actor, numeric actor (co-fired
+   with E_BAD_PRIORITY).
+2. **Prose↔fixture contradiction on mistyped referents** — fx-create-invalid
+   expected E_BAD_FIELD alone for parent: 42 while it-ts-model's "always
+   well-posed" existence check implied co-firing E_UNKNOWN_ID. Resolved in
+   the body: existence checks are well-posed over STRING-valued referent
+   fields only — no lookup on a non-string. (The fixture was right; the
+   prose now says why.)
+3. **create-parent × linkage-idempotency composition undefined** — resolved:
+   VALIDATION PRECEDES IDEMPOTENCY (unknown parent refuses outright even on
+   a held key), and a clean hit discards the proposal whole, parent edge
+   included. New fixture fx-linkage-parent pins both paths on an
+   in_progress holder (also closing the NIT about the three-status
+   enumeration).
+
+All eight NITs folded: bad at on link/comment/update (incl. the
+E_BAD_TIMESTAMP+E_CYCLE co-fire), unknown ids on update/close/reopen,
+list filters in_progress/closed, mistyped specItemRef/criterionId,
+lowercase t/z designators stored verbatim, import siblings (within-payload
+linkage collision, malformed comment at, dependsOn as forbidden task-record
+key, self-link in import links → E_CYCLE — fx-import-invalid now reports
+nine codes in one sorted set), and the vacuous tasks/links neutral-on-error
+clause removed (export cannot error).
+
+Corpus after round 2: 8 items, 35 criteria, 39 fixtures. Implementation
+unchanged again — both MAJOR semantic resolutions matched what it already
+did.
