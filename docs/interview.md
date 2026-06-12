@@ -484,3 +484,23 @@ multi-comment submission order; ready-after-update witness; link with
 absent at.
 
 Corpus after round 12: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 13 — MERGE (2026-06-12)
+
+All 39 traced clean; the prose-commitment audit — the family's
+historically blocking class — came back clean: "every normative clause I
+could find is either fixture-carried or ceded in the preamble with a
+reason," with the reviewer independently confirming all three residues
+are genuinely unfixturable as claimed. Three NITs, all explicitly
+non-blocking and covered transitively; accepted as disclosed.
+
+**Final corpus: 8 items, 35 criteria (33 behavioral + 2 judgment), 39
+fixtures.** Thirteen rounds, REWORK×12 → MERGE. Every blocker across all
+rounds was the same defect class the watchdog ceremony named: a normative
+commitment without a fixture that discriminates it. The implementation,
+written against the round-0 draft, changed ONCE in thirteen rounds (the
+round-6 type/priority code-routing ambiguity) — the interview's
+front-loading held. New felag-class findings this ceremony: $-token
+normalization makes never-by-id ordering structurally unfixturable
+(residue class, joins art-ubo.4's lexeme residue), and single-actor
+corpora cannot discriminate attribution provenance (round 4).
