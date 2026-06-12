@@ -360,8 +360,8 @@ function doLink(state: StoreState, c: Command): Result {
   reqString(errs, c.actor);
   reqAt(errs, c.at);
   let type: LinkType | undefined;
-  if (!isString(c.type)) errs.add("E_MISSING_FIELD");
-  else if (!LINK_TYPES.includes(c.type)) errs.add("E_BAD_TYPE");
+  if (c.type === undefined) errs.add("E_MISSING_FIELD");
+  else if (!isString(c.type) || !LINK_TYPES.includes(c.type)) errs.add("E_BAD_TYPE");
   else type = c.type as LinkType;
   const from = isString(c.id) ? findTask(state, c.id) : undefined;
   const to = isString(c.dependsOn) ? findTask(state, c.dependsOn) : undefined;
@@ -472,11 +472,11 @@ function doImport(state: StoreState, c: Command): Result {
     const r = raw;
     for (const f of ["createdAt", "createdBy", "id", "title"])
       if (!isString(r[f])) errs.add("E_MISSING_FIELD");
-    if (!isString(r.type)) errs.add("E_MISSING_FIELD");
-    else if (!TYPES.includes(r.type)) errs.add("E_BAD_TYPE");
-    if (!isString(r.status)) errs.add("E_MISSING_FIELD");
-    else if (!STATUSES.includes(r.status)) errs.add("E_BAD_FIELD");
-    if (typeof r.priority !== "number") errs.add("E_MISSING_FIELD");
+    if (r.type === undefined) errs.add("E_MISSING_FIELD");
+    else if (!isString(r.type) || !TYPES.includes(r.type)) errs.add("E_BAD_TYPE");
+    if (r.status === undefined) errs.add("E_MISSING_FIELD");
+    else if (!isString(r.status) || !STATUSES.includes(r.status)) errs.add("E_BAD_FIELD");
+    if (r.priority === undefined) errs.add("E_MISSING_FIELD");
     else if (!isPriority(r.priority)) errs.add("E_BAD_PRIORITY");
     for (const f of ["createdAt", "startedAt", "closedAt"]) {
       const v = r[f];
@@ -524,8 +524,8 @@ function doImport(state: StoreState, c: Command): Result {
     const l = raw;
     for (const f of ["id", "dependsOn"]) if (!isString(l[f])) errs.add("E_MISSING_FIELD");
     let type: LinkType | undefined;
-    if (!isString(l.type)) errs.add("E_MISSING_FIELD");
-    else if (!LINK_TYPES.includes(l.type)) errs.add("E_BAD_TYPE");
+    if (l.type === undefined) errs.add("E_MISSING_FIELD");
+    else if (!isString(l.type) || !LINK_TYPES.includes(l.type)) errs.add("E_BAD_TYPE");
     else type = l.type as LinkType;
     if ((isString(l.id) && !knows(l.id)) || (isString(l.dependsOn) && !knows(l.dependsOn)))
       errs.add("E_UNKNOWN_ID");

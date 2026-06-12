@@ -347,3 +347,32 @@ task (also pins update-assignee overriding claim-assignee).
 
 Corpus after round 5: 8 items, 35 criteria, 39 fixtures. Implementation
 unchanged a fifth time.
+
+## Cold review round 6 — REWORK (2026-06-12)
+
+All 39 traced clean (including an explicit re-derivation of all ten codes
+in fx-import-invalid's big payload). Two MAJORs, both closable by extending
+existing fixtures:
+
+1. **Import retention of assignee/startedAt never observed** — both fields
+   were validated on import but no surviving record carried them to a
+   query; a parse-validate-then-drop importer passed. fx-roundtrip now
+   imports an in_progress record with both stamps and reads them back via
+   export AND show.
+2. **Envelope×record co-fire uncarried** — a short-circuiting importer
+   (envelope first, records never) produced the right single code on every
+   fixture. New op: offsetless envelope at + vocabulary-violating record →
+   sorted pair.
+
+Six NITs folded — one of which forced the ceremony's FIRST implementation
+change: the link `type` code routing (absent → E_MISSING_FIELD vs
+present-but-invalid → E_BAD_TYPE) was genuinely ambiguous between the
+shared required-field rule and the type/priority exception. Pinned: type
+and priority carry their own codes for ANY present-but-invalid value,
+required or optional; only absence of a required one is E_MISSING_FIELD.
+core.ts updated in three places (link, import record, import link) — the
+one divergence six rounds of review found in the implementation. Also:
+parent-child self-link E_CYCLE, non-string link referents, update-on-open,
+comment-on-closed, claim-specific field+transition co-fire.
+
+Corpus after round 6: 8 items, 35 criteria, 39 fixtures.

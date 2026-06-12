@@ -86,7 +86,7 @@ Ids are opaque strings, unique within one store against every id it has ever hel
 
 Timestamps: every at-valued field is an RFC 3339 date-time, parseable exactly as felag-core it-verification's Timestamps rule defines (numeric offset or Z required, T and Z case-insensitive, second 60 excluded) — that rule is incorporated by reference, not restated. A required timestamp field that is absent or not a string is E_MISSING_FIELD; a string that does not parse is E_BAD_TIMESTAMP. Accepted timestamps are stored and returned VERBATIM: this contract never normalizes to UTC and never orders anything by timestamp value — every ordering it defines is submission or creation order — so offset spelling can never change observable output beyond the verbatim field itself.
 
-Results are envelopes with exact key sets. Every result carries ok (boolean) and errors (array); create adds created and id; show adds task; list, ready, and report add entries; export adds tasks and links; import adds imported. On error the payload fields hold neutral values: id null, created false, task null, entries [], imported 0 (export takes no arguments and cannot error, so tasks and links have no error case). errors is a sorted set — ascending code-point order, deduplicated — and validation is all-applicable, never short-circuiting: every well-posed check reports its code. Well-posedness: field-validity checks (presence, type, vocabulary, timestamp parse) are always well-posed and co-fire. Referent-existence checks are well-posed over STRING-valued referent fields only, and then co-fire: a referent field that fails its type check reports its type error (E_BAD_FIELD, or E_MISSING_FIELD when required) alone — no existence lookup happens on a non-string, so a numeric parent never adds E_UNKNOWN_ID. Checks that interrogate an existing referent and can REFUSE — transition legality, cycle detection, parent uniqueness — are gated ONLY by what they interrogate: each evaluates whenever its referents exist (and, for link's graph checks, whenever the type names a known graph), and CO-FIRES with any field errors elsewhere in the command. The two referent-interrogating SUCCESS paths are different: duplicate-link detection and linkage idempotency divert a command to its no-op/hit envelope only when the command validates clean — a command reporting any error never reaches them (it-ts-create, it-ts-links). An unparseable at never suppresses E_BAD_TRANSITION on a known referent; an unknown referent suppresses exactly the checks that needed it. A command reporting any error changes nothing: per-command atomicity. Field-validity rules shared by every command: a required field absent or not of its declared type is E_MISSING_FIELD; an optional field present but not of its declared type is E_BAD_FIELD, except type (E_BAD_TYPE) and priority (E_BAD_PRIORITY), which carry their own codes wherever they appear. Error codes at 0.1.0: E_BAD_FIELD, E_BAD_PRIORITY, E_BAD_TIMESTAMP, E_BAD_TRANSITION, E_BAD_TYPE, E_CYCLE, E_DUP_ID, E_DUP_LINKAGE, E_HAS_PARENT, E_MISSING_FIELD, E_UNKNOWN_ID.
+Results are envelopes with exact key sets. Every result carries ok (boolean) and errors (array); create adds created and id; show adds task; list, ready, and report add entries; export adds tasks and links; import adds imported. On error the payload fields hold neutral values: id null, created false, task null, entries [], imported 0 (export takes no arguments and cannot error, so tasks and links have no error case). errors is a sorted set — ascending code-point order, deduplicated — and validation is all-applicable, never short-circuiting: every well-posed check reports its code. Well-posedness: field-validity checks (presence, type, vocabulary, timestamp parse) are always well-posed and co-fire. Referent-existence checks are well-posed over STRING-valued referent fields only, and then co-fire: a referent field that fails its type check reports its type error (E_BAD_FIELD, or E_MISSING_FIELD when required) alone — no existence lookup happens on a non-string, so a numeric parent never adds E_UNKNOWN_ID. Checks that interrogate an existing referent and can REFUSE — transition legality, cycle detection, parent uniqueness — are gated ONLY by what they interrogate: each evaluates whenever its referents exist (and, for link's graph checks, whenever the type names a known graph), and CO-FIRES with any field errors elsewhere in the command. The two referent-interrogating SUCCESS paths are different: duplicate-link detection and linkage idempotency divert a command to its no-op/hit envelope only when the command validates clean — a command reporting any error never reaches them (it-ts-create, it-ts-links). An unparseable at never suppresses E_BAD_TRANSITION on a known referent; an unknown referent suppresses exactly the checks that needed it. A command reporting any error changes nothing: per-command atomicity. Field-validity rules shared by every command: a required field absent or not of its declared type is E_MISSING_FIELD; an optional field present but not of its declared type is E_BAD_FIELD. Exception: type-valued fields (E_BAD_TYPE) and priority (E_BAD_PRIORITY) carry their own codes for ANY present-but-invalid value — unknown string, wrong JSON type, out-of-range — wherever they appear and whether required or optional; only ABSENCE of a required type or priority is E_MISSING_FIELD. Error codes at 0.1.0: E_BAD_FIELD, E_BAD_PRIORITY, E_BAD_TIMESTAMP, E_BAD_TRANSITION, E_BAD_TYPE, E_CYCLE, E_DUP_ID, E_DUP_LINKAGE, E_HAS_PARENT, E_MISSING_FIELD, E_UNKNOWN_ID.
 
 The store holds work tracking only: memory, knowledge, and identity live in the owner's memory layer, and this contract deliberately offers no surface for them — the boundary that is not enforced is the boundary that erodes (see the exclusions and ac-ts-loom-boundary).`,
   {
@@ -246,7 +246,7 @@ must(
 item(
   "it-ts-links",
   "link — typed dependencies",
-  `link {id, dependsOn, type, actor, at} records that task id depends on task dependsOn. Types: blocks | parent-child; anything else E_BAD_TYPE. Both id and dependsOn must name held tasks; unknown referents report E_UNKNOWN_ID — errors being a set, one code however many referents are unknown.
+  `link {id, dependsOn, type, actor, at} records that task id depends on task dependsOn. Types: blocks | parent-child — type is required: absent is E_MISSING_FIELD, any present-but-invalid value (unknown string, non-string) is E_BAD_TYPE (the it-ts-model exception). Both id and dependsOn must name held tasks; unknown referents report E_UNKNOWN_ID — errors being a set, one code however many referents are unknown — and a non-string referent field reports E_MISSING_FIELD with no lookup and no graph checks.
 
 The two types form SEPARATE directed graphs. A link whose addition would create a directed cycle within its own type's graph — including the self-link, a 1-cycle — reports E_CYCLE; an edge in one graph never contributes to a cycle in the other (a blocks edge a->b coexists with a parent-child edge b->a). parent-child additionally keeps a forest: a task already holding a parent-child edge to some parent refuses a parent-child edge to a DIFFERENT parent with E_HAS_PARENT. Parent-uniqueness and cycle detection CO-FIRE when both hold — a link that would both re-parent a parented task and close a parent-graph cycle reports the sorted pair E_CYCLE + E_HAS_PARENT; only duplicate detection suppresses them.
 
@@ -363,7 +363,7 @@ item(
   "export and import — the exit door",
   `export takes no arguments and returns {ok, errors, tasks, links}: the store's complete observable content. tasks holds every held task in creation order, each in the show shape MINUS the derived keys parent and dependsOn — edges live once, in links — with comments always present ([] when none) and every other optional key exactly when held. links holds every edge in creation order, shape {dependsOn, id, type}. Export is total and live: every contract field a task holds appears, every time. An export that summarizes, truncates, or lags the store does not conform — the brownfield motivation for this contract: the predecessor's passive export was probed stale (24 of 45 issues) and lossy (no descriptions) on 2026-06-12.
 
-import {tasks, links?, actor, at} accepts export-shaped content. The envelope actor and at are required and validate per the shared rules (E_MISSING_FIELD / E_BAD_TIMESTAMP); their values are not observable at 0.1.0 — audit recording is the binding's business (see the exclusions). Required per task record: createdAt, createdBy, id, priority, status, title, type (absent or mistyped: E_MISSING_FIELD). Vocabulary and validity: type per create (E_BAD_TYPE); status one of open | in_progress | closed (E_BAD_FIELD); priority an integer 0..4 (E_BAD_PRIORITY); every timestamp field present — createdAt, startedAt, closedAt, comment ats — parseable (E_BAD_TIMESTAMP). Optionals as create accepts, plus assignee, startedAt, closedAt, closeReason, and comments ([{actor, at, text}], each field a required string). A task record carrying parent or dependsOn keys is E_BAD_FIELD — edges arrive only via links. Id collisions — within the payload or against any held id — report E_DUP_ID; linkage-key collisions (it-ts-create) likewise E_DUP_LINKAGE. links entries validate exactly as link does, over the union of held and payload ids. Stamp cross-consistency is NOT validated: whether a closed record carries closedAt is the exporter's business (see the exclusions); records are held verbatim.
+import {tasks, links?, actor, at} accepts export-shaped content. The envelope actor and at are required and validate per the shared rules (E_MISSING_FIELD / E_BAD_TIMESTAMP); their values are not observable at 0.1.0 — audit recording is the binding's business (see the exclusions). Required per task record: createdAt, createdBy, id, priority, status, title, type — absence is E_MISSING_FIELD; present-but-invalid values follow the shared rules (the it-ts-model exception included): type E_BAD_TYPE and priority E_BAD_PRIORITY for ANY invalid present value, status non-string or outside open | in_progress | closed E_BAD_FIELD, the string fields mistyped E_MISSING_FIELD, and every timestamp field present — createdAt, startedAt, closedAt, comment ats — parseable (E_BAD_TIMESTAMP). Optionals as create accepts, plus assignee, startedAt, closedAt, closeReason, and comments ([{actor, at, text}], each field a required string). A task record carrying parent or dependsOn keys is E_BAD_FIELD — edges arrive only via links. Id collisions — within the payload or against any held id — report E_DUP_ID; linkage-key collisions (it-ts-create) likewise E_DUP_LINKAGE. links entries validate exactly as link does, over the union of held and payload ids. Stamp cross-consistency is NOT validated: whether a closed record carries closedAt is the exporter's business (see the exclusions); records are held verbatim.
 
 Import is ATOMIC: any error anywhere in the payload reports the full sorted error set with imported 0 and the store unchanged. On success, imported is the number of task records, ids are held literally — never regenerated — legacyRef and every field survive verbatim, and creation order extends by payload order. Round trip: importing an export into an empty store and exporting again yields the imported records exactly.`,
 );
@@ -711,6 +711,7 @@ fx(
     { op: "reopen", actor: A, at: T2, id: "$1" },
     { op: "claim", actor: A, at: "2026-06-12T18:00:00", id: "legacy-ghost" },
     { op: "claim", actor: A, at: T3, id: "$9" },
+    { op: "claim", actor: A, at: "2026-06-12T18:00:00", id: "$1" },
     { op: "show", id: "$1" },
   ],
   [
@@ -720,6 +721,7 @@ fx(
     actErr(["E_BAD_TRANSITION"]),
     actErr(["E_BAD_TIMESTAMP", "E_UNKNOWN_ID"]),
     actErr(["E_UNKNOWN_ID"]),
+    actErr(["E_BAD_TIMESTAMP", "E_BAD_TRANSITION"]),
     showOK(task({ assignee: A, id: "$1", startedAt: T1, status: "in_progress", title: "work" })),
   ],
 );
@@ -757,6 +759,7 @@ fx(
     { op: "close", actor: A, at: "2026-06-12T18:00:00", id: "$1", reason: 42 },
     { op: "claim", actor: A, at: T3, id: "$1" },
     { op: "close", actor: A, at: T4, id: "legacy-ghost" },
+    { op: "comment", actor: A, at: T4, id: "$1", text: "epitaph on closed work" },
     { op: "show", id: "$1" },
   ],
   [
@@ -766,7 +769,14 @@ fx(
     actErr(["E_BAD_FIELD", "E_BAD_TIMESTAMP", "E_BAD_TRANSITION"]),
     actErr(["E_BAD_TRANSITION"]),
     actErr(["E_UNKNOWN_ID"]),
-    showOK(task({ closeReason: "done", closedAt: T1, id: "$1", status: "closed", title: "once" })),
+    actOK,
+    showOK(
+      task({
+        closeReason: "done", closedAt: T1,
+        comments: [{ actor: A, at: T4, text: "epitaph on closed work" }],
+        id: "$1", status: "closed", title: "once",
+      }),
+    ),
   ],
 );
 
@@ -969,6 +979,7 @@ fx(
     { op: "link", actor: A, at: T4, dependsOn: "$1", id: "$1", type: "blocks" },
     { op: "link", actor: A, at: T5, dependsOn: "$1", id: "$2", type: "parent-child" },
     { op: "link", actor: A, at: T5, dependsOn: "$2", id: "$1", type: "parent-child" },
+    { op: "link", actor: A, at: T5, dependsOn: "$3", id: "$3", type: "parent-child" },
   ],
   [
     createOK("$1"),
@@ -979,6 +990,7 @@ fx(
     actErr(["E_CYCLE"]),
     actErr(["E_CYCLE"]),
     actOK,
+    actErr(["E_CYCLE"]),
     actErr(["E_CYCLE"]),
   ],
 );
@@ -1043,12 +1055,15 @@ fx(
 
 fx(
   "fx-link-invalid",
-  "Unknown referents report E_UNKNOWN_ID once however many are unknown, co-fired with E_BAD_TYPE for an unknown type; a self-link with an offsetless at co-fires E_BAD_TIMESTAMP and E_CYCLE; no edge is recorded.",
+  "Unknown referents report E_UNKNOWN_ID once however many are unknown, co-fired with E_BAD_TYPE for an unknown type; a self-link with an offsetless at co-fires E_BAD_TIMESTAMP and E_CYCLE; an absent type is E_MISSING_FIELD while a numeric type is E_BAD_TYPE; non-string referents are E_MISSING_FIELD with no lookup or graph checks; no edge is recorded.",
   [
     { op: "create", actor: A, at: T0, title: "a" },
     { op: "link", actor: A, at: T1, dependsOn: "legacy-ghost", id: "$1", type: "strangles" },
     { op: "link", actor: A, at: T2, dependsOn: "legacy-also-gone", id: "legacy-gone", type: "blocks" },
     { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$1", id: "$1", type: "blocks" },
+    { op: "link", actor: A, at: T3, dependsOn: "$1", id: "$1" },
+    { op: "link", actor: A, at: T3, dependsOn: "$1", id: "$1", type: 42 },
+    { op: "link", actor: A, at: T4, dependsOn: [], id: 9, type: "blocks" },
     { op: "export" },
   ],
   [
@@ -1056,6 +1071,9 @@ fx(
     actErr(["E_BAD_TYPE", "E_UNKNOWN_ID"]),
     actErr(["E_UNKNOWN_ID"]),
     actErr(["E_BAD_TIMESTAMP", "E_CYCLE"]),
+    actErr(["E_MISSING_FIELD"]),
+    actErr(["E_BAD_TYPE"]),
+    actErr(["E_MISSING_FIELD"]),
     exportOK([exTask({ id: "$1", title: "a" })], []),
   ],
 );
@@ -1113,9 +1131,10 @@ fx(
 
 fx(
   "fx-update",
-  "update replaces exactly the named fields on a task of any status — in_progress and closed both — overrides a claim-set assignee, and never touches status or stamps.",
+  "update replaces exactly the named fields on a task of any status — open, in_progress, and closed — overrides a claim-set assignee, and never touches status or stamps.",
   [
     { op: "create", actor: A, at: T0, title: "old title" },
+    { op: "update", actor: A, at: T1, id: "$1", set: { priority: 1 } },
     { op: "claim", actor: "jonathan", at: T1, id: "$1" },
     { op: "update", actor: A, at: T2, id: "$1", set: { assignee: A, description: "now described", priority: 0, title: "new title" } },
     { op: "close", actor: A, at: T3, id: "$1", reason: "shipped" },
@@ -1124,6 +1143,7 @@ fx(
   ],
   [
     createOK("$1"),
+    actOK,
     actOK,
     actOK,
     actOK,
@@ -1371,7 +1391,7 @@ fx(
 
 fx(
   "fx-import-invalid",
-  "One import payload violating many rules at once reports all ten codes in one sorted set and imports nothing; an envelope missing actor and at is E_MISSING_FIELD; an unparseable envelope at is E_BAD_TIMESTAMP; a record whose ONLY defects are offsetless startedAt/closedAt is E_BAD_TIMESTAMP (stamp parseability is not createdAt-only); a valid empty import succeeds with imported 0; a tasks-absent import is E_MISSING_FIELD.",
+  "One import payload violating many rules at once reports all ten codes in one sorted set and imports nothing; an envelope missing actor and at is E_MISSING_FIELD; an unparseable envelope at is E_BAD_TIMESTAMP; a record whose ONLY defects are offsetless startedAt/closedAt is E_BAD_TIMESTAMP (stamp parseability is not createdAt-only); a valid empty import succeeds with imported 0; a tasks-absent import is E_MISSING_FIELD; a bad envelope and a bad record CO-FIRE in one sorted set — neither side short-circuits the other.",
   [
     {
       op: "import", actor: A, at: T0,
@@ -1416,6 +1436,12 @@ fx(
     },
     { op: "import", actor: A, at: T3, tasks: [] },
     { op: "import", actor: A, at: T3 },
+    {
+      op: "import", actor: A, at: "2026-01-02T00:00:00",
+      tasks: [
+        { createdAt: "2026-01-09T00:00:00Z", createdBy: A, id: "legacy-12", priority: 2, status: "open", title: "bad type under a bad envelope", type: "saga" },
+      ],
+    },
   ],
   [
     importOK(1),
@@ -1429,32 +1455,42 @@ fx(
     importErr(["E_BAD_TIMESTAMP"]),
     importOK(0),
     importErr(["E_MISSING_FIELD"]),
+    importErr(["E_BAD_TIMESTAMP", "E_BAD_TYPE"]),
   ],
 );
 
 fx(
   "fx-roundtrip",
-  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly, in payload order (listed in reverse-id order) — the exit door is lossless in both directions.",
+  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly, in payload order (listed in reverse-id order) — claim stamps (assignee, startedAt) included: the exit door is lossless in both directions.",
   [
     {
       op: "import", actor: A, at: T0,
       tasks: [
+        { assignee: "jonathan", comments: [], createdAt: "2026-01-07T00:00:00Z", createdBy: A, id: "legacy-c", priority: 2, startedAt: "2026-01-08T00:00:00Z", status: "in_progress", title: "mid-flight", type: "task" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
         { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
       ],
       links: [{ dependsOn: "legacy-a", id: "legacy-b", type: "blocks" }],
     },
     { op: "export" },
+    { op: "show", id: "legacy-c" },
   ],
   [
-    importOK(2),
+    importOK(3),
     exportOK(
       [
+        { assignee: "jonathan", comments: [], createdAt: "2026-01-07T00:00:00Z", createdBy: A, id: "legacy-c", priority: 2, startedAt: "2026-01-08T00:00:00Z", status: "in_progress", title: "mid-flight", type: "task" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
         { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
       ],
       [{ dependsOn: "legacy-a", id: "legacy-b", type: "blocks" }],
     ),
+    showOK({
+      assignee: "jonathan", comments: [], createdAt: "2026-01-07T00:00:00Z",
+      createdBy: A, dependsOn: [], id: "legacy-c", priority: 2,
+      startedAt: "2026-01-08T00:00:00Z", status: "in_progress",
+      title: "mid-flight", type: "task",
+    }),
   ],
 );
 
