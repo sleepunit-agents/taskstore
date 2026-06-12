@@ -104,7 +104,7 @@ must(
 must(
   "ac-ts-timestamps",
   "it-ts-model",
-  "Given commands whose at is a parseable RFC 3339 instant with a non-Z offset, an offsetless date-time, and a leap-second date-time\nWhen they run\nThen the offset timestamp is accepted and returned verbatim — never normalized to UTC — and the offsetless and leap-second forms are rejected with E_BAD_TIMESTAMP, creating nothing",
+  "Given parseable non-Z-offset and lowercase-designator timestamps on create, claim, close, comment, and imported records, plus offsetless and leap-second forms\nWhen they run\nThen every accepted at-valued field — createdAt, startedAt, closedAt, comment ats, imported stamps — is returned verbatim through show and export, never normalized to UTC on ANY field, and the offsetless and leap-second forms are rejected with E_BAD_TIMESTAMP, creating nothing",
   ["fx-timestamp-bad", "fx-timestamp-verbatim"],
 );
 must(
@@ -455,18 +455,58 @@ fx(
 
 fx(
   "fx-timestamp-verbatim",
-  "An accepted non-Z offset timestamp and lowercase t/z designators are stored and returned verbatim, never normalized or upcased.",
+  "Non-Z offsets and lowercase t/z designators are stored and returned verbatim on EVERY at-valued field — createdAt, startedAt, closedAt, comment ats, and imported stamps alike — never normalized to UTC, never upcased, through show and export both.",
   [
     { op: "create", actor: A, at: "2026-06-12T13:00:00-05:00", title: "offset task" },
     { op: "show", id: "$1" },
     { op: "create", actor: A, at: "2026-06-12t20:00:00z", title: "lowercase designators" },
     { op: "show", id: "$2" },
+    { op: "claim", actor: "jonathan", at: "2026-06-12T14:30:00-05:00", id: "$1" },
+    { op: "comment", actor: A, at: "2026-06-12t21:00:00z", id: "$1", text: "offset comment" },
+    { op: "close", actor: A, at: "2026-06-13T01:00:00+02:00", id: "$1", reason: "wrapped" },
+    { op: "show", id: "$1" },
+    {
+      op: "import", actor: A, at: T0,
+      tasks: [
+        { assignee: A, comments: [{ actor: A, at: "2026-01-03T00:00:00-08:00", text: "imported offset comment" }], createdAt: "2026-01-01T10:00:00+05:30", createdBy: A, id: "legacy-t", priority: 2, startedAt: "2026-01-02t00:00:00z", status: "in_progress", title: "imported with offsets", type: "task" },
+      ],
+    },
+    { op: "export" },
   ],
   [
     createOK("$1"),
     showOK(task({ createdAt: "2026-06-12T13:00:00-05:00", id: "$1", title: "offset task" })),
     createOK("$2"),
     showOK(task({ createdAt: "2026-06-12t20:00:00z", id: "$2", title: "lowercase designators" })),
+    actOK,
+    actOK,
+    actOK,
+    showOK(
+      task({
+        assignee: "jonathan", closeReason: "wrapped", closedAt: "2026-06-13T01:00:00+02:00",
+        comments: [{ actor: A, at: "2026-06-12t21:00:00z", text: "offset comment" }],
+        createdAt: "2026-06-12T13:00:00-05:00", id: "$1",
+        startedAt: "2026-06-12T14:30:00-05:00", status: "closed", title: "offset task",
+      }),
+    ),
+    importOK(1),
+    exportOK(
+      [
+        exTask({
+          assignee: "jonathan", closeReason: "wrapped", closedAt: "2026-06-13T01:00:00+02:00",
+          comments: [{ actor: A, at: "2026-06-12t21:00:00z", text: "offset comment" }],
+          createdAt: "2026-06-12T13:00:00-05:00", id: "$1",
+          startedAt: "2026-06-12T14:30:00-05:00", status: "closed", title: "offset task",
+        }),
+        exTask({ createdAt: "2026-06-12t20:00:00z", id: "$2", title: "lowercase designators" }),
+        exTask({
+          assignee: A, comments: [{ actor: A, at: "2026-01-03T00:00:00-08:00", text: "imported offset comment" }],
+          createdAt: "2026-01-01T10:00:00+05:30", id: "legacy-t", startedAt: "2026-01-02t00:00:00z",
+          status: "in_progress", title: "imported with offsets",
+        }),
+      ],
+      [],
+    ),
   ],
 );
 
@@ -1070,6 +1110,7 @@ fx(
     { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "link", at: T5, dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "show", id: "$1" },
+    { op: "show", id: "$2" },
     { op: "export" },
   ],
   [
@@ -1082,6 +1123,7 @@ fx(
     actErr(["E_BAD_TIMESTAMP"]),
     actErr(["E_MISSING_FIELD"]),
     showOK(task({ dependsOn: ["$2"], id: "$1", parent: "$2", title: "a" })),
+    showOK(task({ createdAt: T1, id: "$2", title: "b" })),
     exportOK(
       [exTask({ id: "$1", title: "a" }), exTask({ createdAt: T1, id: "$2", title: "b" })],
       [
@@ -1213,6 +1255,7 @@ fx(
     { op: "update", actor: A, at: T2, id: "$1", set: { title: "smuggled alongside", type: "epic" } },
     { op: "update", actor: A, at: T2, id: "$1", set: { legacyRef: "art-x" } },
     { op: "update", actor: A, at: T2, id: "$1", set: { assignee: 1, description: [] } },
+    { op: "update", actor: A, at: T3, id: "$1", set: { priority: null } },
     { op: "update", actor: A, at: T3, id: "$1", set: { priority: 7, title: 9 } },
     { op: "update", actor: A, at: 42, id: "$1", set: { title: "never lands" } },
     { op: "update", actor: A, at: T4, id: "legacy-ghost", set: { title: "no target" } },
@@ -1227,6 +1270,7 @@ fx(
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
+    actErr(["E_BAD_PRIORITY"]),
     actErr(["E_BAD_FIELD", "E_BAD_PRIORITY"]),
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_UNKNOWN_ID"]),
@@ -1489,6 +1533,18 @@ fx(
         { closedAt: "2026-03-01T00:00:00", createdAt: "2026-01-08T00:00:00Z", createdBy: A, id: "legacy-8", priority: 2, startedAt: "2026-02-01T00:00:00", status: "closed", title: "only the claim and close stamps are bad", type: "task" },
       ],
     },
+    {
+      op: "import", actor: A, at: T2,
+      tasks: [
+        { createdAt: "2026-01-11T00:00:00Z", createdBy: A, id: "legacy-14", priority: 2, status: "open", title: 9, type: "task" },
+      ],
+    },
+    {
+      op: "import", actor: A, at: T2,
+      tasks: [
+        { createdAt: "2026-01-12T00:00:00Z", createdBy: A, id: "legacy-15", priority: null, status: "open", title: "null priority record", type: "task" },
+      ],
+    },
     { op: "import", actor: 42, at: T3, tasks: [] },
     { op: "import", actor: A, at: T3, tasks: [] },
     { op: "import", actor: A, at: T3 },
@@ -1509,6 +1565,8 @@ fx(
     importErr(["E_MISSING_FIELD"]),
     importErr(["E_BAD_TIMESTAMP"]),
     importErr(["E_BAD_TIMESTAMP"]),
+    importErr(["E_MISSING_FIELD"]),
+    importErr(["E_BAD_PRIORITY"]),
     importErr(["E_MISSING_FIELD"]),
     importOK(0),
     importErr(["E_MISSING_FIELD"]),

@@ -432,3 +432,22 @@ link with absent actor (doubling as another only-when-clean witness on a
 held edge).
 
 Corpus after round 9: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 10 — REWORK (2026-06-12)
+
+All 39 traced clean ("the suite is otherwise exceptionally tight"). One
+MAJOR: the verbatim-timestamp MUST was carried only for createdAt — an
+overfit implementation that special-cases the one fixtured field and
+canonicalizes startedAt/closedAt/comment ats/imported stamps to UTC-Z
+passed everything, breaking exactly the round-trip losslessness the exit
+door exists for. fx-timestamp-verbatim now walks offsets and lowercase
+designators through claim, close, comment, and an imported in_progress
+record, asserted verbatim in show AND export. Four NITs folded: import
+sole-defect isolation for mistyped title (E_MISSING_FIELD) and
+priority:null (E_BAD_PRIORITY); update set priority:null; show on a pure
+blocks-target asserting dependsOn [] (direction, not bidirectional);
+ready tie-break across the import boundary left as carried-by-composition
+(the reviewer's own assessment) — covered implicitly via creation-order
+extension plus the existing tie-break fixture.
+
+Corpus after round 10: 8 items, 35 criteria, 39 fixtures.
