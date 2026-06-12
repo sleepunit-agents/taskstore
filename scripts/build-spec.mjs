@@ -135,7 +135,7 @@ Defaults and vocabulary: type defaults to task; the vocabulary is task | bug | f
 
 A successful create stores the task with status open, createdAt = at (verbatim), createdBy = actor, the given fields, and a fresh id (created true). parent, when present, must name a held task (else E_UNKNOWN_ID, co-firing with any field errors); on success the parent-child edge (id depends on parent) is created atomically with the task, exactly as if link had run — a fresh task has no prior parent and cannot complete a cycle, so no link-side code can arise. legacyRef is preserved verbatim wherever the task renders (show, export).
 
-Spec linkage: specItemRef (by convention 'spec:<specName>/<itemId>') with optional criterionId. criterionId without specItemRef is E_MISSING_FIELD. Linkage idempotency — the c-tasks rule, native: tasks are keyed on (specItemRef, criterionId), absent criterionId a distinct key value. VALIDATION PRECEDES IDEMPOTENCY: a create reporting any error — field or referent, an unknown parent included — does nothing and returns the error envelope (id null), even when its linkage key is held. A create that validates clean and whose key is already held is a HIT: it returns ok true, created false, and the EXISTING task's id, whatever that task's status — open, claimed, or closed — and changes nothing: the title, the parent (no edge is created), and every other field of the proposal are discarded whole. Creates with no specItemRef carry no key and never collide. Distinct criterionIds under one specItemRef are distinct tasks.`,
+Spec linkage: specItemRef (by convention 'spec:<specName>/<itemId>') with optional criterionId. criterionId when the specItemRef KEY is absent is E_MISSING_FIELD — key-presence, not value-validity: a criterionId alongside a present-but-mistyped specItemRef reports only the type error. Linkage idempotency — the c-tasks rule, native: tasks are keyed on (specItemRef, criterionId), absent criterionId a distinct key value. VALIDATION PRECEDES IDEMPOTENCY: a create reporting any error — field or referent, an unknown parent included — does nothing and returns the error envelope (id null), even when its linkage key is held. A create that validates clean and whose key is already held is a HIT: it returns ok true, created false, and the EXISTING task's id, whatever that task's status — open, claimed, or closed — and changes nothing: the title, the parent (no edge is created), and every other field of the proposal are discarded whole. Creates with no specItemRef carry no key and never collide. Distinct criterionIds under one specItemRef are distinct tasks.`,
 );
 
 must(
@@ -147,7 +147,7 @@ must(
 must(
   "ac-ts-create-parent",
   "it-ts-create",
-  "Given a create naming a held task as parent and another naming an unknown id\nWhen they run\nThen the first creates the task and the parent-child edge atomically — visible as parent in show and as a links entry in export\nAnd the second reports E_UNKNOWN_ID and creates nothing",
+  "Given a create naming a held task as parent and another naming an unknown id\nWhen they run, and link is then exercised against the create-set edge\nThen the first creates the task and the parent-child edge atomically — visible as parent in show, as a links entry in export, and to link itself: re-parenting is E_HAS_PARENT, re-linking the identical edge is a no-op, and a cycle through the create-set edge is E_CYCLE\nAnd the second reports E_UNKNOWN_ID and creates nothing",
   ["fx-create-bad-parent", "fx-create-parent"],
 );
 must(
@@ -184,7 +184,7 @@ A lifecycle command whose target's status is outside its requirement reports E_B
 must(
   "ac-ts-claim",
   "it-ts-lifecycle",
-  "Given an open task\nWhen claim runs\nThen the task is in_progress with assignee = the command's actor and startedAt = the command's at, verbatim",
+  "Given an open task created by one actor\nWhen a DIFFERENT actor claims it\nThen the task is in_progress with assignee = the claiming command's actor — never the creator, never a session default — and startedAt = the command's at, verbatim",
   ["fx-claim"],
 );
 must(
@@ -491,38 +491,47 @@ fx(
 
 fx(
   "fx-create-defaults",
-  "A minimal create takes type task, priority 2, status open, stamps from the command, and no absent-field keys; an explicit create holds exactly what it was given.",
+  "A minimal create takes type task, priority 2, status open, stamps from the command, and no absent-field keys; an explicit create holds exactly what it was given — createdBy is the COMMAND's actor, not a session default.",
   [
     { op: "create", actor: A, at: T0, title: "plain" },
     { op: "show", id: "$1" },
-    { op: "create", actor: A, at: T1, description: "boom on deploy", priority: 0, title: "urgent bug", type: "bug" },
+    { op: "create", actor: "jonathan", at: T1, description: "boom on deploy", priority: 0, title: "urgent bug", type: "bug" },
     { op: "show", id: "$2" },
   ],
   [
     createOK("$1"),
     showOK(task({ id: "$1", title: "plain" })),
     createOK("$2"),
-    showOK(task({ createdAt: T1, description: "boom on deploy", id: "$2", priority: 0, title: "urgent bug", type: "bug" })),
+    showOK(task({ createdAt: T1, createdBy: "jonathan", description: "boom on deploy", id: "$2", priority: 0, title: "urgent bug", type: "bug" })),
   ],
 );
 
 fx(
   "fx-create-parent",
-  "create with parent creates the task and the parent-child edge atomically: parent in show, edge in export.",
+  "create with parent creates the task and the parent-child edge atomically — and the edge is the SAME edge link sees: re-parenting is E_HAS_PARENT, the identical re-link is a no-op, a cycle through it is E_CYCLE.",
   [
     { op: "create", actor: A, at: T0, priority: 1, title: "the epic", type: "epic" },
     { op: "create", actor: A, at: T1, parent: "$1", title: "first child" },
+    { op: "create", actor: A, at: T2, title: "rival parent" },
+    { op: "link", actor: A, at: T3, dependsOn: "$3", id: "$2", type: "parent-child" },
+    { op: "link", actor: A, at: T3, dependsOn: "$1", id: "$2", type: "parent-child" },
+    { op: "link", actor: A, at: T4, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "show", id: "$2" },
     { op: "export" },
   ],
   [
     createOK("$1"),
     createOK("$2"),
+    createOK("$3"),
+    actErr(["E_HAS_PARENT"]),
+    actOK,
+    actErr(["E_CYCLE"]),
     showOK(task({ createdAt: T1, id: "$2", parent: "$1", title: "first child" })),
     exportOK(
       [
         exTask({ id: "$1", priority: 1, title: "the epic", type: "epic" }),
         exTask({ createdAt: T1, id: "$2", title: "first child" }),
+        exTask({ createdAt: T2, id: "$3", title: "rival parent" }),
       ],
       [{ dependsOn: "$1", id: "$2", type: "parent-child" }],
     ),
@@ -677,16 +686,16 @@ fx(
 
 fx(
   "fx-claim",
-  "claim moves open to in_progress and stamps assignee and startedAt from the command.",
+  "claim moves open to in_progress and stamps assignee from the CLAIMING command's actor — created by art, claimed by jonathan, assignee jonathan, createdBy art.",
   [
     { op: "create", actor: A, at: T0, title: "work" },
-    { op: "claim", actor: A, at: T1, id: "$1" },
+    { op: "claim", actor: "jonathan", at: T1, id: "$1" },
     { op: "show", id: "$1" },
   ],
   [
     createOK("$1"),
     actOK,
-    showOK(task({ assignee: A, id: "$1", startedAt: T1, status: "in_progress", title: "work" })),
+    showOK(task({ assignee: "jonathan", id: "$1", startedAt: T1, status: "in_progress", title: "work" })),
   ],
 );
 
@@ -1127,6 +1136,7 @@ fx(
     { op: "update", actor: A, at: T1, id: "$1", set: "priority 0" },
     { op: "update", actor: A, at: T2, id: "$1", set: { status: "closed" } },
     { op: "update", actor: A, at: T2, id: "$1", set: { title: "smuggled alongside", type: "epic" } },
+    { op: "update", actor: A, at: T2, id: "$1", set: { assignee: 1, description: [] } },
     { op: "update", actor: A, at: T3, id: "$1", set: { priority: 7, title: 9 } },
     { op: "update", actor: A, at: 42, id: "$1", set: { title: "never lands" } },
     { op: "update", actor: A, at: T4, id: "legacy-ghost", set: { title: "no target" } },
@@ -1137,6 +1147,7 @@ fx(
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
+    actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD", "E_BAD_PRIORITY"]),
@@ -1291,13 +1302,13 @@ fx(
 
 fx(
   "fx-import",
-  "Import holds export-shaped records verbatim under their literal ids — stamps, comments, legacyRef, and the parent edge intact — and later creates extend creation order.",
+  "Import holds export-shaped records verbatim under their literal ids — stamps, comments, legacyRef, and the parent edge intact — in PAYLOAD order (listed here in reverse-id order, so an id-sorted import diverges), and later creates extend creation order.",
   [
     {
       op: "import", actor: A, at: T0,
       tasks: [
-        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, id: "legacy-1", legacyRef: "art-ubo", priority: 1, status: "open", title: "old epic", type: "epic" },
         { closeReason: "shipped", closedAt: "2026-02-01T00:00:00Z", comments: [{ actor: A, at: "2026-01-07T00:00:00Z", text: "carried across" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-2", priority: 2, status: "closed", title: "old child", type: "task" },
+        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, id: "legacy-1", legacyRef: "art-ubo", priority: 1, status: "open", title: "old epic", type: "epic" },
       ],
       links: [{ dependsOn: "legacy-1", id: "legacy-2", type: "parent-child" }],
     },
@@ -1316,8 +1327,8 @@ fx(
     }),
     createOK("$1"),
     entriesOK([
-      { id: "legacy-1", priority: 1, status: "open", title: "old epic", type: "epic" },
       { id: "legacy-2", parent: "legacy-1", priority: 2, status: "closed", title: "old child", type: "task" },
+      { id: "legacy-1", priority: 1, status: "open", title: "old epic", type: "epic" },
       { id: "$1", priority: 2, status: "open", title: "new work", type: "task" },
     ]),
   ],
@@ -1375,6 +1386,12 @@ fx(
     },
     { op: "list" },
     { op: "import", tasks: [] },
+    {
+      op: "import", actor: A, at: "2026-01-01T00:00:00",
+      tasks: [
+        { createdAt: "2026-01-08T00:00:00Z", createdBy: A, id: "legacy-8", priority: 2, status: "open", title: "valid but the envelope clock is not", type: "task" },
+      ],
+    },
   ],
   [
     importOK(1),
@@ -1384,18 +1401,19 @@ fx(
     ]),
     entriesOK([{ id: "legacy-1", priority: 2, status: "open", title: "held import", type: "task" }]),
     importErr(["E_MISSING_FIELD"]),
+    importErr(["E_BAD_TIMESTAMP"]),
   ],
 );
 
 fx(
   "fx-roundtrip",
-  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly — the exit door is lossless in both directions.",
+  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly, in payload order (listed in reverse-id order) — the exit door is lossless in both directions.",
   [
     {
       op: "import", actor: A, at: T0,
       tasks: [
-        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
+        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
       ],
       links: [{ dependsOn: "legacy-a", id: "legacy-b", type: "blocks" }],
     },
@@ -1405,8 +1423,8 @@ fx(
     importOK(2),
     exportOK(
       [
-        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
+        { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
       ],
       [{ dependsOn: "legacy-a", id: "legacy-b", type: "blocks" }],
     ),

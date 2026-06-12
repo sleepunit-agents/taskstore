@@ -295,3 +295,29 @@ preamble residue exclusion.
 Corpus after round 3: 8 items, 35 criteria, 39 fixtures (two extended, none
 added — coverage went into existing sequences). Implementation unchanged a
 third time.
+
+## Cold review round 4 — REWORK (2026-06-12)
+
+All 39 traced clean, including the subtle E_HAS_PARENT derivation through
+an invalid payload record's id. Three MAJORs:
+
+1. **Attribution provenance undiscriminated** — every create and claim in
+   the corpus carried actor "art", so a hardcoded createdBy/assignee passed
+   everything. fx-claim now creates as art and claims as jonathan;
+   fx-create-defaults creates as jonathan and reads createdBy back.
+2. **create's parent shortcut never met link's invariants** — a side-field
+   parent implementation that link never consults passed all 39.
+   fx-create-parent now drives link against the create-set edge:
+   re-parent → E_HAS_PARENT, identical re-link → no-op, cycle through it →
+   E_CYCLE.
+3. **Import-envelope E_BAD_TIMESTAMP uncarried** — only the
+   E_MISSING_FIELD half was fixtured. fx-import-invalid now sends a valid
+   payload under an offsetless envelope at → E_BAD_TIMESTAMP, imported 0.
+
+NITs folded: key-presence (not value-validity) wording for the lone
+criterionId rule; import payload order now reverse-id in fx-import and
+fx-roundtrip (an id-sorting importer diverges); assignee/description
+non-string in update set.
+
+Corpus after round 4: 8 items, 35 criteria, 39 fixtures. Implementation
+unchanged a fourth time.
