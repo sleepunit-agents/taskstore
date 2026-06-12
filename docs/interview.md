@@ -376,3 +376,20 @@ parent-child self-link E_CYCLE, non-string link referents, update-on-open,
 comment-on-closed, claim-specific field+transition co-fire.
 
 Corpus after round 6: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 7 — REWORK (2026-06-12)
+
+All 39 traced clean, with the reviewer explicitly re-deriving the
+ten-code import set (including that errored records still contribute ids
+to the link-validation union — discriminated, not accidental), the
+type-gates-graph-checks asymmetry, and the known-vs-unknown referent
+co-fire pair. One MAJOR: actor validation was fixtured only on create —
+the spec's own discipline spreads the sibling `at` rule across six
+commands, but actor rode on create alone ("close the actor gap and this
+merges"). Folded: claim with absent actor co-firing E_BAD_TRANSITION +
+E_MISSING_FIELD on a known target, comment with absent actor, import
+envelope with numeric actor. Three NITs folded: non-string at on comment
+(the E_MISSING_FIELD branch), lone-criterionId co-firing with a second
+field error, non-string createdBy on an import record.
+
+Corpus after round 7: 8 items, 35 criteria, 39 fixtures.
