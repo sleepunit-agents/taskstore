@@ -378,7 +378,7 @@ must(
 must(
   "ac-ts-import",
   "it-ts-portability",
-  "Given an import of export-shaped records with literal legacy ids, stamps, comments, and a parent-child link\nWhen it runs and the store is queried\nThen the records are held verbatim under their literal ids — stamps, comments, legacyRef, and the edge intact — and subsequent creates take creation-order positions after them",
+  "Given an import of export-shaped records with literal legacy ids, stamps, multi-comment arrays, spec linkage, and parent-child and blocks links\nWhen the store is queried through every window\nThen the records are held verbatim under their literal ids in payload order, imported open tasks surface in ready and imported blocks edges gate it, imported spec-linked tasks project through report, and a clean create against an imported linkage key is a HIT returning the literal imported id — imported tasks are full store members",
   ["fx-import"],
 );
 must(
@@ -1114,6 +1114,7 @@ fx(
     { op: "link", actor: A, at: T5, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "link", at: T5, dependsOn: "$2", id: "$1", type: "blocks" },
+    { op: "link", actor: A, dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "show", id: "$1" },
     { op: "show", id: "$2" },
     { op: "export" },
@@ -1126,6 +1127,7 @@ fx(
     actOK,
     actOK,
     actErr(["E_BAD_TIMESTAMP"]),
+    actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
     showOK(task({ dependsOn: ["$2"], id: "$1", parent: "$2", title: "a" })),
     showOK(task({ createdAt: T1, id: "$2", title: "b" })),
@@ -1227,6 +1229,7 @@ fx(
   [
     { op: "create", actor: A, at: T0, title: "old title" },
     { op: "update", actor: A, at: T1, id: "$1", set: { priority: 4 } },
+    { op: "ready" },
     { op: "claim", actor: "jonathan", at: T1, id: "$1" },
     { op: "update", actor: A, at: T2, id: "$1", set: { assignee: A, description: "now described", priority: 0, title: "new title" } },
     { op: "close", actor: A, at: T3, id: "$1", reason: "shipped" },
@@ -1236,6 +1239,7 @@ fx(
   [
     createOK("$1"),
     actOK,
+    entriesOK([{ id: "$1", priority: 4, title: "old title", type: "task" }]),
     actOK,
     actOK,
     actOK,
@@ -1443,35 +1447,56 @@ fx(
 
 fx(
   "fx-import",
-  "Import holds export-shaped records verbatim under their literal ids — stamps, comments, legacyRef, and the parent edge intact — in PAYLOAD order (listed here in reverse-id order, so an id-sorted import diverges), and later creates extend creation order.",
+  "Import holds export-shaped records verbatim under their literal ids in PAYLOAD order (reverse-id here, so an id-sorted import diverges) — and imported tasks are FULL store members: they surface in ready, gate ready through imported blocks edges, project through report, multi-comment submission order survives, and a create against an imported linkage key is a HIT returning the literal imported id.",
   [
     {
       op: "import", actor: A, at: T0,
       tasks: [
-        { closeReason: "shipped", closedAt: "2026-02-01T00:00:00Z", comments: [{ actor: A, at: "2026-01-07T00:00:00Z", text: "carried across" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-2", priority: 2, status: "closed", title: "old child", type: "task" },
+        { comments: [], createdAt: "2026-01-03T00:00:00Z", createdBy: A, id: "legacy-3", priority: 2, status: "open", title: "gated by an imported edge", type: "task" },
+        { closeReason: "shipped", closedAt: "2026-02-01T00:00:00Z", comments: [{ actor: A, at: "2026-01-07T00:00:00Z", text: "carried across" }, { actor: "jonathan", at: "2026-01-02T00:00:00Z", text: "later submitted, earlier clock" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-2", priority: 2, status: "closed", title: "old child", type: "task" },
         { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, id: "legacy-1", legacyRef: "art-ubo", priority: 1, status: "open", title: "old epic", type: "epic" },
+        { comments: [], createdAt: "2026-01-04T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-0", priority: 2, specItemRef: "spec:mini/imported", status: "open", title: "imported workable", type: "task" },
       ],
-      links: [{ dependsOn: "legacy-1", id: "legacy-2", type: "parent-child" }],
+      links: [
+        { dependsOn: "legacy-1", id: "legacy-2", type: "parent-child" },
+        { dependsOn: "legacy-1", id: "legacy-3", type: "blocks" },
+      ],
     },
     { op: "show", id: "legacy-2" },
     { op: "create", actor: A, at: T1, title: "new work" },
     { op: "list" },
+    { op: "ready" },
+    { op: "report" },
+    { op: "create", actor: A, at: T2, criterionId: "ac1", specItemRef: "spec:mini/imported", title: "replay of the imported key" },
   ],
   [
-    importOK(2),
+    importOK(4),
     showOK({
       closeReason: "shipped", closedAt: "2026-02-01T00:00:00Z",
-      comments: [{ actor: A, at: "2026-01-07T00:00:00Z", text: "carried across" }],
+      comments: [
+        { actor: A, at: "2026-01-07T00:00:00Z", text: "carried across" },
+        { actor: "jonathan", at: "2026-01-02T00:00:00Z", text: "later submitted, earlier clock" },
+      ],
       createdAt: "2026-01-06T00:00:00Z", createdBy: A, dependsOn: [],
       id: "legacy-2", parent: "legacy-1", priority: 2, status: "closed",
       title: "old child", type: "task",
     }),
     createOK("$1"),
     entriesOK([
+      { id: "legacy-3", priority: 2, status: "open", title: "gated by an imported edge", type: "task" },
       { id: "legacy-2", parent: "legacy-1", priority: 2, status: "closed", title: "old child", type: "task" },
       { id: "legacy-1", priority: 1, status: "open", title: "old epic", type: "epic" },
+      { id: "legacy-0", priority: 2, status: "open", title: "imported workable", type: "task" },
       { id: "$1", priority: 2, status: "open", title: "new work", type: "task" },
     ]),
+    entriesOK([
+      { id: "legacy-0", priority: 2, title: "imported workable", type: "task" },
+      { id: "$1", priority: 2, title: "new work", type: "task" },
+    ]),
+    entriesOK([
+      { criterionId: "ac1", specItemRef: "spec:mini/imported", status: "open", taskRef: "legacy-0" },
+    ]),
+    { created: false, errors: [], id: "legacy-0", ok: true },
   ],
 );
 
@@ -1585,11 +1610,12 @@ fx(
 
 fx(
   "fx-roundtrip",
-  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly, in payload order (listed in reverse-id order) — claim stamps (assignee, startedAt) included: the exit door is lossless in both directions.",
+  "Importing an export-shaped payload into an empty store and exporting yields the payload exactly, in payload order (reverse-id) — claim stamps included, and a stamp-inconsistent record (open with a stray closeReason) held verbatim: cross-consistency is the exporter's business, never re-validated or repaired.",
   [
     {
       op: "import", actor: A, at: T0,
       tasks: [
+        { closeReason: "stray fields, exporter's business", comments: [], createdAt: "2026-01-08T00:00:00Z", createdBy: A, id: "legacy-d", priority: 2, status: "open", title: "stamp-inconsistent, held verbatim", type: "task" },
         { assignee: "jonathan", comments: [], createdAt: "2026-01-07T00:00:00Z", createdBy: A, id: "legacy-c", priority: 2, startedAt: "2026-01-08T00:00:00Z", status: "in_progress", title: "mid-flight", type: "task" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
         { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },
@@ -1601,9 +1627,10 @@ fx(
     { op: "show", id: "legacy-b" },
   ],
   [
-    importOK(3),
+    importOK(4),
     exportOK(
       [
+        { closeReason: "stray fields, exporter's business", comments: [], createdAt: "2026-01-08T00:00:00Z", createdBy: A, id: "legacy-d", priority: 2, status: "open", title: "stamp-inconsistent, held verbatim", type: "task" },
         { assignee: "jonathan", comments: [], createdAt: "2026-01-07T00:00:00Z", createdBy: A, id: "legacy-c", priority: 2, startedAt: "2026-01-08T00:00:00Z", status: "in_progress", title: "mid-flight", type: "task" },
         { closeReason: "cancelled", closedAt: "2026-03-01T00:00:00Z", comments: [{ actor: "jonathan", at: "2026-02-01T00:00:00Z", text: "calling it" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task" },
         { comments: [], createdAt: "2026-01-05T00:00:00Z", createdBy: A, description: "kept whole", id: "legacy-a", legacyRef: "art-111", priority: 1, status: "open", title: "survivor", type: "feature" },

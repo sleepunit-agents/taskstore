@@ -466,3 +466,21 @@ non-string closeReason isolated on a legal target; imported blocks edge
 surfacing in show.dependsOn; numeric comment at inside an import record.
 
 Corpus after round 11: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 12 — REWORK (2026-06-12)
+
+All 39 traced clean. One MAJOR cluster: imported tasks were observed
+only through show/list/export — never by ready, report, or create's
+linkage index in the import→create direction. Three wrong
+implementations survived: a partition-scanning ready, a created-only
+report, and a create-HIT index that misses imported keys (the sharpest
+— fx-import-dup proved create→import sharing, but not the reverse).
+fx-import now imports a workable spec-linked task, an imported-edge-gated
+task, and runs ready, report, and a clean create against the imported
+key → HIT with the literal legacy id. Four NITs folded: a
+stamp-inconsistent record (open + stray closeReason) held verbatim
+through fx-roundtrip (the too-strict importer killed); imported
+multi-comment submission order; ready-after-update witness; link with
+absent at.
+
+Corpus after round 12: 8 items, 35 criteria, 39 fixtures.
