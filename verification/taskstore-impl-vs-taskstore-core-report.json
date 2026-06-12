@@ -1,0 +1,9 @@
+{
+  "advisory": [],
+  "conformanceVersion": "0.1.0",
+  "disputed": [],
+  "failing": [],
+  "implementation": "taskstore-impl",
+  "verdict": "conforms",
+  "waived": []
+}
