@@ -321,3 +321,29 @@ non-string in update set.
 
 Corpus after round 4: 8 items, 35 criteria, 39 fixtures. Implementation
 unchanged a fourth time.
+
+## Cold review round 5 — REWORK (2026-06-12)
+
+All 39 traced clean; "fix the two MAJORs (one fixture each) and this is a
+MERGE." Both folded:
+
+1. **Field-error half of validation-precedes-idempotency uncarried** — a
+   short-circuit-to-hit implementation (held key skips field validation)
+   passed the corpus. fx-linkage-idempotent now replays the held key with
+   priority 9 → error envelope, never a hit. The it-ts-model wording that
+   listed linkage idempotency among co-firing referent checks was the last
+   trace of the round-1 contradiction — reworded: duplicate detection and
+   idempotency are SUCCESS paths reached only by clean commands.
+2. **Import startedAt/closedAt parseability never isolated** — a
+   createdAt-and-comments-only parser passed. New import op whose record's
+   ONLY defects are offsetless startedAt/closedAt → E_BAD_TIMESTAMP.
+
+All six NITs folded: non-string list filter; reopen field-preservation
+(description/legacyRef/priority/comments survive — only the claim/close
+stamps are removed); import mistyped optionals; forbidden parent and
+dependsOn keys on separate records; valid-empty import succeeds with
+imported 0 and tasks-absent is E_MISSING_FIELD; update on an in_progress
+task (also pins update-assignee overriding claim-assignee).
+
+Corpus after round 5: 8 items, 35 criteria, 39 fixtures. Implementation
+unchanged a fifth time.
