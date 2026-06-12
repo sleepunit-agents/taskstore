@@ -1,0 +1,26 @@
+{
+  "name": "taskstore",
+  "version": "0.1.0",
+  "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "build-spec": "node scripts/build-spec.mjs",
+    "self-verify": "tsx scripts/self-verify.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "felag": "file:../felag",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}
