@@ -393,3 +393,26 @@ envelope with numeric actor. Three NITs folded: non-string at on comment
 field error, non-string createdBy on an import record.
 
 Corpus after round 7: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 8 — REWORK (2026-06-12)
+
+All 39 traced clean ("the corpus is strong and the prose is unusually
+disciplined"); coherence audit found no contradictions and the error model
+precedence-free. Two MAJORs, single-fixture closes:
+
+1. **Transitive vs direct blocking unfixtured** — every readiness fixture
+   used one blocks edge, so a transitive-closure stranger ("blocked if any
+   upstream is open") passed everything. fx-ready-unblock is now a
+   three-task chain with the middle closed and the far upstream open: the
+   head IS ready — blocking is one edge deep.
+2. **Duplicate-link diversion's only-when-clean half uncarried** — the
+   idempotency twin was fixtured twice, but a short-circuit-on-held-edge
+   link handler survived. fx-link-dup now resubmits a held edge with an
+   offsetless at → error envelope, never a clean no-op.
+
+Five NITs folded: update set rejecting real-but-non-settable keys
+(legacyRef), lone criterionId on the import path (legacy-13), show with
+absent and numeric id (E_MISSING_FIELD, task null), boolean and null
+priority (coercion-stranger kills).
+
+Corpus after round 8: 8 items, 35 criteria, 39 fixtures.

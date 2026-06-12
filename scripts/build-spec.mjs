@@ -564,6 +564,8 @@ fx(
     { op: "create", actor: A, at: T0, criterionId: true, specItemRef: 5, title: "mistyped linkage" },
     { op: "create", actor: A, at: T0, priority: -1, title: "below range" },
     { op: "create", actor: A, at: T0, priority: "high", title: "named priority" },
+    { op: "create", actor: A, at: T0, priority: true, title: "boolean priority" },
+    { op: "create", actor: A, at: T0, priority: null, title: "null priority" },
     { op: "create", actor: A, at: T1, priority: 4, title: "boundary" },
     { op: "list" },
   ],
@@ -577,6 +579,8 @@ fx(
     createErr(["E_BAD_PRIORITY", "E_MISSING_FIELD"]),
     createErr(["E_BAD_FIELD"]),
     createErr(["E_BAD_FIELD"]),
+    createErr(["E_BAD_PRIORITY"]),
+    createErr(["E_BAD_PRIORITY"]),
     createErr(["E_BAD_PRIORITY"]),
     createErr(["E_BAD_PRIORITY"]),
     createOK("$1"),
@@ -900,20 +904,27 @@ fx(
 
 fx(
   "fx-ready-unblock",
-  "Closing the blocker releases the dependent into ready.",
+  "Closing the DIRECT blocker releases the dependent — blocking is one edge deep, never the transitive closure: the head of a chain is ready when its own blocker closes, whatever the far upstream's status.",
   [
     { op: "create", actor: A, at: T0, title: "downstream" },
-    { op: "create", actor: A, at: T1, title: "upstream" },
-    { op: "link", actor: A, at: T2, dependsOn: "$2", id: "$1", type: "blocks" },
-    { op: "close", actor: A, at: T3, id: "$2" },
+    { op: "create", actor: A, at: T1, title: "middle" },
+    { op: "create", actor: A, at: T2, title: "far upstream, still open" },
+    { op: "link", actor: A, at: T3, dependsOn: "$2", id: "$1", type: "blocks" },
+    { op: "link", actor: A, at: T3, dependsOn: "$3", id: "$2", type: "blocks" },
+    { op: "close", actor: A, at: T4, id: "$2" },
     { op: "ready" },
   ],
   [
     createOK("$1"),
     createOK("$2"),
+    createOK("$3"),
     actOK,
     actOK,
-    entriesOK([{ id: "$1", priority: 2, title: "downstream", type: "task" }]),
+    actOK,
+    entriesOK([
+      { id: "$1", priority: 2, title: "downstream", type: "task" },
+      { id: "$3", priority: 2, title: "far upstream, still open", type: "task" },
+    ]),
   ],
 );
 
@@ -1028,7 +1039,7 @@ fx(
 
 fx(
   "fx-link-dup",
-  "Re-linking an identical edge — blocks or parent-child — is an accepted no-op: one edge each in export, and the repeated parent edge is never E_HAS_PARENT.",
+  "Re-linking an identical edge — blocks or parent-child — is an accepted no-op: one edge each in export, the repeated parent edge is never E_HAS_PARENT, and the no-op diversion happens ONLY for clean commands — an identical edge with a bad at is the error envelope.",
   [
     { op: "create", actor: A, at: T0, title: "a" },
     { op: "create", actor: A, at: T1, title: "b" },
@@ -1036,6 +1047,7 @@ fx(
     { op: "link", actor: A, at: T3, dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "link", actor: A, at: T4, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "link", actor: A, at: T5, dependsOn: "$2", id: "$1", type: "parent-child" },
+    { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "show", id: "$1" },
     { op: "export" },
   ],
@@ -1046,6 +1058,7 @@ fx(
     actOK,
     actOK,
     actOK,
+    actErr(["E_BAD_TIMESTAMP"]),
     showOK(task({ dependsOn: ["$2"], id: "$1", parent: "$2", title: "a" })),
     exportOK(
       [exTask({ id: "$1", title: "a" }), exTask({ createdAt: T1, id: "$2", title: "b" })],
@@ -1176,6 +1189,7 @@ fx(
     { op: "update", actor: A, at: T1, id: "$1", set: "priority 0" },
     { op: "update", actor: A, at: T2, id: "$1", set: { status: "closed" } },
     { op: "update", actor: A, at: T2, id: "$1", set: { title: "smuggled alongside", type: "epic" } },
+    { op: "update", actor: A, at: T2, id: "$1", set: { legacyRef: "art-x" } },
     { op: "update", actor: A, at: T2, id: "$1", set: { assignee: 1, description: [] } },
     { op: "update", actor: A, at: T3, id: "$1", set: { priority: 7, title: 9 } },
     { op: "update", actor: A, at: 42, id: "$1", set: { title: "never lands" } },
@@ -1187,6 +1201,7 @@ fx(
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
+    actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
@@ -1204,11 +1219,15 @@ fx(
   "show renders exactly the held keys — every optional present when held, absent otherwise — and an unknown id is E_UNKNOWN_ID with task null.",
   [
     { op: "show", id: "legacy-ghost" },
+    { op: "show" },
+    { op: "show", id: 9 },
     { op: "create", actor: A, at: T0, criterionId: "ac9", description: "all fields", legacyRef: "art-419", priority: 1, specItemRef: "spec:mini/it9", title: "everything", type: "feature" },
     { op: "show", id: "$1" },
   ],
   [
     showErr,
+    { errors: ["E_MISSING_FIELD"], ok: false, task: null },
+    { errors: ["E_MISSING_FIELD"], ok: false, task: null },
     createOK("$1"),
     showOK(
       task({
@@ -1419,6 +1438,7 @@ fx(
         { comments: [{ actor: A, at: "2026-01-06T00:00:00", text: "offsetless comment" }, { at: "2026-01-06T01:00:00Z" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-5", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "first of colliding pair", type: "task" },
         { createdAt: "2026-01-07T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-6", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "second of colliding pair", type: "task" },
         { id: "legacy-7", title: "bare bones" },
+        { createdAt: "2026-01-10T00:00:00Z", createdBy: A, criterionId: "ac9", id: "legacy-13", priority: 2, status: "open", title: "lone criterion in a record", type: "task" },
       ],
       links: [
         { dependsOn: "legacy-1", id: "legacy-9", type: "blocks" },
