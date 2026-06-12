@@ -231,7 +231,7 @@ must(
 must(
   "ac-ts-ready-blocked",
   "it-ts-ready",
-  "Given a task with a blocks edge to an open blocker\nWhen ready runs before the blocker closes, after the blocker is merely claimed, and after the blocker closes\nThen the dependent is absent while the blocker is open, still absent while the blocker is in_progress, and present once the blocker is closed",
+  "Given tasks with one and with two blocks edges to open blockers\nWhen ready runs as blockers are claimed and closed one at a time\nThen the dependent is absent while ANY blocker is open or merely claimed — blockers gate as a conjunction, never released on the first unblock — present only when every direct blocker is closed, and blocking is one edge deep (a closed direct blocker releases the head whatever the far upstream's status)",
   ["fx-ready-block", "fx-ready-unblock"],
 );
 must(
@@ -719,6 +719,7 @@ fx(
     { op: "claim", actor: A, at: T3, id: "$9" },
     { op: "claim", actor: A, at: "2026-06-12T18:00:00", id: "$1" },
     { op: "claim", at: T3, id: "$1" },
+    { op: "claim", actor: A, at: T3, id: 9 },
     { op: "show", id: "$1" },
   ],
   [
@@ -730,6 +731,7 @@ fx(
     actErr(["E_UNKNOWN_ID"]),
     actErr(["E_BAD_TIMESTAMP", "E_BAD_TRANSITION"]),
     actErr(["E_BAD_TRANSITION", "E_MISSING_FIELD"]),
+    actErr(["E_MISSING_FIELD"]),
     showOK(task({ assignee: A, id: "$1", startedAt: T1, status: "in_progress", title: "work" })),
   ],
 );
@@ -847,15 +849,21 @@ fx(
 
 fx(
   "fx-ready-epic",
-  "Epics never appear in ready — even at priority 0, where wrong inclusion would head the queue; their children do.",
+  "Epics never appear in ready — even at priority 0, where wrong inclusion would head the queue; their children do. The exclusion is ready-only: an epic claims and closes like any task.",
   [
     { op: "create", actor: A, at: T0, priority: 0, title: "container", type: "epic" },
     { op: "create", actor: A, at: T1, parent: "$1", title: "child" },
+    { op: "ready" },
+    { op: "claim", actor: A, at: T2, id: "$1" },
+    { op: "close", actor: A, at: T3, id: "$1", reason: "container done" },
     { op: "ready" },
   ],
   [
     createOK("$1"),
     createOK("$2"),
+    entriesOK([{ id: "$2", priority: 2, title: "child", type: "task" }]),
+    actOK,
+    actOK,
     entriesOK([{ id: "$2", priority: 2, title: "child", type: "task" }]),
   ],
 );
@@ -883,13 +891,19 @@ fx(
 
 fx(
   "fx-ready-block",
-  "An open blocks-blocker excludes the dependent from ready; a merely claimed blocker still excludes it.",
+  "An open blocker excludes the dependent; a merely claimed blocker still excludes it; with TWO blockers the dependent stays excluded until BOTH close — blockers are a conjunction, never released on the first unblock.",
   [
     { op: "create", actor: A, at: T0, priority: 0, title: "downstream" },
     { op: "create", actor: A, at: T1, title: "upstream" },
     { op: "link", actor: A, at: T2, dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "ready" },
     { op: "claim", actor: A, at: T3, id: "$2" },
+    { op: "ready" },
+    { op: "create", actor: A, at: T4, title: "second blocker" },
+    { op: "link", actor: A, at: T4, dependsOn: "$3", id: "$1", type: "blocks" },
+    { op: "close", actor: A, at: T5, id: "$2" },
+    { op: "ready" },
+    { op: "close", actor: A, at: T5, id: "$3" },
     { op: "ready" },
   ],
   [
@@ -899,6 +913,12 @@ fx(
     entriesOK([{ id: "$2", priority: 2, title: "upstream", type: "task" }]),
     actOK,
     entriesOK([]),
+    createOK("$3"),
+    actOK,
+    actOK,
+    entriesOK([{ id: "$3", priority: 2, title: "second blocker", type: "task" }]),
+    actOK,
+    entriesOK([{ id: "$1", priority: 0, title: "downstream", type: "task" }]),
   ],
 );
 
@@ -1048,6 +1068,7 @@ fx(
     { op: "link", actor: A, at: T4, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "link", actor: A, at: T5, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "link", actor: A, at: "2026-06-12T18:00:00", dependsOn: "$2", id: "$1", type: "blocks" },
+    { op: "link", at: T5, dependsOn: "$2", id: "$1", type: "blocks" },
     { op: "show", id: "$1" },
     { op: "export" },
   ],
@@ -1059,6 +1080,7 @@ fx(
     actOK,
     actOK,
     actErr(["E_BAD_TIMESTAMP"]),
+    actErr(["E_MISSING_FIELD"]),
     showOK(task({ dependsOn: ["$2"], id: "$1", parent: "$2", title: "a" })),
     exportOK(
       [exTask({ id: "$1", title: "a" }), exTask({ createdAt: T1, id: "$2", title: "b" })],
@@ -1155,7 +1177,7 @@ fx(
   "update replaces exactly the named fields on a task of any status — open, in_progress, and closed — overrides a claim-set assignee, and never touches status or stamps.",
   [
     { op: "create", actor: A, at: T0, title: "old title" },
-    { op: "update", actor: A, at: T1, id: "$1", set: { priority: 1 } },
+    { op: "update", actor: A, at: T1, id: "$1", set: { priority: 4 } },
     { op: "claim", actor: "jonathan", at: T1, id: "$1" },
     { op: "update", actor: A, at: T2, id: "$1", set: { assignee: A, description: "now described", priority: 0, title: "new title" } },
     { op: "close", actor: A, at: T3, id: "$1", reason: "shipped" },
@@ -1335,6 +1357,7 @@ fx(
     { op: "create", actor: A, at: T0, criterionId: "ac1", description: "carries everything", legacyRef: "art-999", priority: 1, specItemRef: "spec:mini/it1", title: "rich", type: "bug" },
     { op: "claim", actor: A, at: T1, id: "$1" },
     { op: "comment", actor: A, at: T2, id: "$1", text: "working on it" },
+    { op: "comment", actor: "jonathan", at: "2026-06-12T16:00:00Z", id: "$1", text: "second said, earlier clock" },
     { op: "create", actor: A, at: "2026-06-12T17:00:00Z", title: "plain friend" },
     { op: "link", actor: A, at: T4, dependsOn: "$1", id: "$2", type: "blocks" },
     { op: "export" },
@@ -1343,13 +1366,17 @@ fx(
     createOK("$1"),
     actOK,
     actOK,
+    actOK,
     createOK("$2"),
     actOK,
     exportOK(
       [
         exTask({
           assignee: A,
-          comments: [{ actor: A, at: T2, text: "working on it" }],
+          comments: [
+            { actor: A, at: T2, text: "working on it" },
+            { actor: "jonathan", at: "2026-06-12T16:00:00Z", text: "second said, earlier clock" },
+          ],
           criterionId: "ac1", description: "carries everything", id: "$1",
           legacyRef: "art-999", priority: 1, specItemRef: "spec:mini/it1",
           startedAt: T1, status: "in_progress", title: "rich", type: "bug",

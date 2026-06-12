@@ -416,3 +416,19 @@ absent and numeric id (E_MISSING_FIELD, task null), boolean and null
 priority (coercion-stranger kills).
 
 Corpus after round 8: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 9 — REWORK (2026-06-12)
+
+All 39 traced clean (~26 wrong implementations enumerated during the
+trace; all but one killed). One MAJOR: multi-blocker AND-gating was
+uncarried — no task in the corpus held two blocks edges of mixed status,
+so a release-on-first-unblock (OR-gating) queue passed everything.
+fx-ready-block is now the full conjunction walk: two blockers, close one
+(dependent still absent), close both (dependent returns). Five NITs
+folded: non-string id on claim, epic claim/close (the exclusion is
+ready-only — types are otherwise labels, proven), multi-comment
+submission order through export, update accepting boundary priority 4,
+link with absent actor (doubling as another only-when-clean witness on a
+held edge).
+
+Corpus after round 9: 8 items, 35 criteria, 39 fixtures.
