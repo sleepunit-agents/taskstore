@@ -265,3 +265,33 @@ clause removed (export cannot error).
 Corpus after round 2: 8 items, 35 criteria, 39 fixtures. Implementation
 unchanged again — both MAJOR semantic resolutions matched what it already
 did.
+
+## Cold review round 3 — REWORK (2026-06-12)
+
+All 39 traced clean. Two MAJORs, both coverage gaps at load-bearing joints:
+
+1. **The (specItemRef, ⊥) key never self-collided** — no fixture replayed a
+   criterion-less spec-linked create, so "absent criterionId is a key
+   value" was indistinguishable from "no criterionId means no key" — and
+   the latter breaks exactly the item-level propose-idempotency that the
+   native-felag-tasks goal rests on. fx-linkage-distinct now replays the
+   keyless key (HIT) and contrasts two no-specItemRef creates (distinct).
+2. **E_HAS_PARENT × E_CYCLE co-fire reachable but unordered** — the
+   duplicate-detection carve-out proved referent checks CAN suppress each
+   other, leaving this pair ambiguous. Pinned: they CO-FIRE (only duplicate
+   detection suppresses); fx-link-parent now carries the re-parent+cycle
+   link → sorted pair.
+
+All nine NITs folded: at absent on create, comment text mistyped, import
+bare-record (all required fields absent at once), import link E_BAD_TYPE +
+E_HAS_PARENT (fx-import-invalid now reports ALL TEN error codes in one
+sorted set — every code in the contract except E_BAD_TRANSITION, which
+cannot arise in import), malformed import comment missing actor/text,
+import envelope actor/at requiredness stated and fixtured, update set
+mixing a valid key with a foreign key, ready-after-comment perturbation
+check, and the vacuous report-taskRef tertiary key ceded as a named
+preamble residue exclusion.
+
+Corpus after round 3: 8 items, 35 criteria, 39 fixtures (two extended, none
+added — coverage went into existing sequences). Implementation unchanged a
+third time.

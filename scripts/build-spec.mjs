@@ -42,6 +42,7 @@ const preamble = {
     "Import stamp cross-consistency: import validates identity, vocabulary, timestamps, and link structure; whether a closed record carries closedAt or an in_progress record carries startedAt is the exporter's business — records are held verbatim.",
     "felag-tasks conformance is proven by running the c-tasks fixture corpus over a WorkLayer projection of this store, not restated here; it-ts-create's linkage idempotency and it-ts-query's report op are the store-side support that makes that layer mapping-only.",
     "Residue: fractional and float-integer-lexeme priority values (2.5, 2.0) are normative in prose — a priority is its mathematical value, an integer 0..4, anything else E_BAD_PRIORITY — but structurally unfixturable in this interchange: felag CS6 canonicalization cannot carry the adversarial lexeme (watchdog-core precedent; felag finding art-ubo.4).",
+    "Residue: report's tertiary taskRef sort key is unfixturable by construction — linkage uniqueness means two spec-linked tasks can never share (specItemRef, criterionId), so the tertiary comparison is never decisive; it is retained verbatim for c-tasks alignment (it-ts-query).",
   ],
   governance: { timeoutDays: 30 },
   implementers: [{ name: "taskstore project", roles: ["author", "maintainer", "repo-owner"] }],
@@ -164,7 +165,7 @@ must(
 must(
   "ac-ts-linkage-distinct",
   "it-ts-create",
-  "Given creates for one specItemRef under criterionId A, criterionId B, and no criterionId\nWhen report runs\nThen three distinct tasks exist, the keyless entry sorting before any criterion-bearing one",
+  "Given creates for one specItemRef under criterionId A, criterionId B, and no criterionId, then a REPLAY of the criterion-less key, then two creates with no specItemRef at all\nWhen report and list run\nThen three distinct spec-linked tasks exist with the keyless entry sorting first, the criterion-less replay is an idempotent HIT on (specItemRef, absent) — absent criterionId is a key value, not no key — and the two no-specItemRef creates are distinct tasks that never collide",
   ["fx-linkage-distinct"],
 );
 
@@ -247,7 +248,7 @@ item(
   "link — typed dependencies",
   `link {id, dependsOn, type, actor, at} records that task id depends on task dependsOn. Types: blocks | parent-child; anything else E_BAD_TYPE. Both id and dependsOn must name held tasks; unknown referents report E_UNKNOWN_ID — errors being a set, one code however many referents are unknown.
 
-The two types form SEPARATE directed graphs. A link whose addition would create a directed cycle within its own type's graph — including the self-link, a 1-cycle — reports E_CYCLE; an edge in one graph never contributes to a cycle in the other (a blocks edge a->b coexists with a parent-child edge b->a). parent-child additionally keeps a forest: a task already holding a parent-child edge to some parent refuses a parent-child edge to a DIFFERENT parent with E_HAS_PARENT.
+The two types form SEPARATE directed graphs. A link whose addition would create a directed cycle within its own type's graph — including the self-link, a 1-cycle — reports E_CYCLE; an edge in one graph never contributes to a cycle in the other (a blocks edge a->b coexists with a parent-child edge b->a). parent-child additionally keeps a forest: a task already holding a parent-child edge to some parent refuses a parent-child edge to a DIFFERENT parent with E_HAS_PARENT. Parent-uniqueness and cycle detection CO-FIRE when both hold — a link that would both re-parent a parented task and close a parent-graph cycle reports the sorted pair E_CYCLE + E_HAS_PARENT; only duplicate detection suppresses them.
 
 A link identical to one already held — same (id, dependsOn, type) triple — is accepted with ok true and changes nothing: no duplicate edge appears anywhere. Duplicate detection precedes the parent-uniqueness and cycle checks: re-linking the identical parent edge is a no-op, never E_HAS_PARENT. Edges render in three places: show renders a task's blocks targets as dependsOn in edge-creation order and its parent-child target as parent; export renders every edge in creation order as {dependsOn, id, type} (it-ts-portability). There is no unlink at 0.1.0 (excluded, deferred-not-refused).`,
 );
@@ -267,7 +268,7 @@ must(
 must(
   "ac-ts-link-parent-unique",
   "it-ts-links",
-  "Given a task with a parent\nWhen a parent-child link to a different parent is attempted\nThen it reports E_HAS_PARENT and show still names the original parent",
+  "Given a task with a parent\nWhen a parent-child link to a different parent is attempted, and when a link would both re-parent it and close a parent-graph cycle\nThen the first reports E_HAS_PARENT, the second reports the sorted pair E_CYCLE + E_HAS_PARENT — the checks co-fire — and show still names the original parent",
   ["fx-link-parent"],
 );
 must(
@@ -362,7 +363,7 @@ item(
   "export and import — the exit door",
   `export takes no arguments and returns {ok, errors, tasks, links}: the store's complete observable content. tasks holds every held task in creation order, each in the show shape MINUS the derived keys parent and dependsOn — edges live once, in links — with comments always present ([] when none) and every other optional key exactly when held. links holds every edge in creation order, shape {dependsOn, id, type}. Export is total and live: every contract field a task holds appears, every time. An export that summarizes, truncates, or lags the store does not conform — the brownfield motivation for this contract: the predecessor's passive export was probed stale (24 of 45 issues) and lossy (no descriptions) on 2026-06-12.
 
-import {tasks, links?, actor, at} accepts export-shaped content. Required per task record: createdAt, createdBy, id, priority, status, title, type (absent or mistyped: E_MISSING_FIELD). Vocabulary and validity: type per create (E_BAD_TYPE); status one of open | in_progress | closed (E_BAD_FIELD); priority an integer 0..4 (E_BAD_PRIORITY); every timestamp field present — createdAt, startedAt, closedAt, comment ats — parseable (E_BAD_TIMESTAMP). Optionals as create accepts, plus assignee, startedAt, closedAt, closeReason, and comments ([{actor, at, text}], each field a required string). A task record carrying parent or dependsOn keys is E_BAD_FIELD — edges arrive only via links. Id collisions — within the payload or against any held id — report E_DUP_ID; linkage-key collisions (it-ts-create) likewise E_DUP_LINKAGE. links entries validate exactly as link does, over the union of held and payload ids. Stamp cross-consistency is NOT validated: whether a closed record carries closedAt is the exporter's business (see the exclusions); records are held verbatim.
+import {tasks, links?, actor, at} accepts export-shaped content. The envelope actor and at are required and validate per the shared rules (E_MISSING_FIELD / E_BAD_TIMESTAMP); their values are not observable at 0.1.0 — audit recording is the binding's business (see the exclusions). Required per task record: createdAt, createdBy, id, priority, status, title, type (absent or mistyped: E_MISSING_FIELD). Vocabulary and validity: type per create (E_BAD_TYPE); status one of open | in_progress | closed (E_BAD_FIELD); priority an integer 0..4 (E_BAD_PRIORITY); every timestamp field present — createdAt, startedAt, closedAt, comment ats — parseable (E_BAD_TIMESTAMP). Optionals as create accepts, plus assignee, startedAt, closedAt, closeReason, and comments ([{actor, at, text}], each field a required string). A task record carrying parent or dependsOn keys is E_BAD_FIELD — edges arrive only via links. Id collisions — within the payload or against any held id — report E_DUP_ID; linkage-key collisions (it-ts-create) likewise E_DUP_LINKAGE. links entries validate exactly as link does, over the union of held and payload ids. Stamp cross-consistency is NOT validated: whether a closed record carries closedAt is the exporter's business (see the exclusions); records are held verbatim.
 
 Import is ATOMIC: any error anywhere in the payload reports the full sorted error set with imported 0 and the store unchanged. On success, imported is the number of task records, ids are held literally — never regenerated — legacyRef and every field survive verbatim, and creation order extends by payload order. Round trip: importing an export into an empty store and exporting again yields the imported records exactly.`,
 );
@@ -545,6 +546,7 @@ fx(
   [
     { op: "create", actor: A, at: T0, title: 9 },
     { op: "create", actor: A, at: 42, title: "numeric clock" },
+    { op: "create", actor: A, title: "clockless" },
     { op: "create", at: T0, title: "nobody claims this" },
     { op: "create", actor: 42, at: T0, priority: 9, title: "numeric actor" },
     { op: "create", actor: A, at: T0, criterionId: "ac1", title: "lone criterion" },
@@ -556,6 +558,7 @@ fx(
     { op: "list" },
   ],
   [
+    createErr(["E_MISSING_FIELD"]),
     createErr(["E_MISSING_FIELD"]),
     createErr(["E_MISSING_FIELD"]),
     createErr(["E_MISSING_FIELD"]),
@@ -637,21 +640,35 @@ fx(
 
 fx(
   "fx-linkage-distinct",
-  "Distinct criterionIds and the keyless form under one specItemRef are three distinct tasks; report sorts the keyless entry first.",
+  "Distinct criterionIds and the criterion-less form under one specItemRef are three distinct tasks; replaying the criterion-less key is an idempotent HIT (absent criterionId is a key value); creates with no specItemRef never collide.",
   [
     { op: "create", actor: A, at: T0, criterionId: "ac1", specItemRef: "spec:mini/it1", title: "a" },
     { op: "create", actor: A, at: T1, criterionId: "ac2", specItemRef: "spec:mini/it1", title: "b" },
     { op: "create", actor: A, at: T2, specItemRef: "spec:mini/it1", title: "item-level" },
+    { op: "create", actor: A, at: T3, specItemRef: "spec:mini/it1", title: "item-level replayed" },
+    { op: "create", actor: A, at: T4, title: "adhoc one" },
+    { op: "create", actor: A, at: T5, title: "adhoc two" },
     { op: "report" },
+    { op: "list" },
   ],
   [
     createOK("$1"),
     createOK("$2"),
     createOK("$3"),
+    createOK("$3", false),
+    createOK("$4"),
+    createOK("$5"),
     entriesOK([
       { specItemRef: "spec:mini/it1", status: "open", taskRef: "$3" },
       { criterionId: "ac1", specItemRef: "spec:mini/it1", status: "open", taskRef: "$1" },
       { criterionId: "ac2", specItemRef: "spec:mini/it1", status: "open", taskRef: "$2" },
+    ]),
+    entriesOK([
+      { id: "$1", priority: 2, status: "open", title: "a", type: "task" },
+      { id: "$2", priority: 2, status: "open", title: "b", type: "task" },
+      { id: "$3", priority: 2, status: "open", title: "item-level", type: "task" },
+      { id: "$4", priority: 2, status: "open", title: "adhoc one", type: "task" },
+      { id: "$5", priority: 2, status: "open", title: "adhoc two", type: "task" },
     ]),
   ],
 );
@@ -949,13 +966,16 @@ fx(
 
 fx(
   "fx-link-parent",
-  "A second parent-child edge to a DIFFERENT parent is E_HAS_PARENT; the original parent holds.",
+  "A second parent-child edge to a DIFFERENT parent is E_HAS_PARENT; a link that would both re-parent and close a parent-graph cycle CO-FIRES E_CYCLE + E_HAS_PARENT; the original parent holds.",
   [
     { op: "create", actor: A, at: T0, title: "child" },
     { op: "create", actor: A, at: T1, title: "first parent" },
     { op: "create", actor: A, at: T2, title: "rival parent" },
     { op: "link", actor: A, at: T3, dependsOn: "$2", id: "$1", type: "parent-child" },
     { op: "link", actor: A, at: T4, dependsOn: "$3", id: "$1", type: "parent-child" },
+    { op: "create", actor: A, at: T4, title: "grandchild" },
+    { op: "link", actor: A, at: T5, dependsOn: "$1", id: "$4", type: "parent-child" },
+    { op: "link", actor: A, at: T5, dependsOn: "$4", id: "$1", type: "parent-child" },
     { op: "show", id: "$1" },
   ],
   [
@@ -964,6 +984,9 @@ fx(
     createOK("$3"),
     actOK,
     actErr(["E_HAS_PARENT"]),
+    createOK("$4"),
+    actOK,
+    actErr(["E_CYCLE", "E_HAS_PARENT"]),
     showOK(task({ id: "$1", parent: "$2", title: "child" })),
   ],
 );
@@ -1028,6 +1051,7 @@ fx(
     { op: "comment", actor: A, at: "2026-06-12T19:00:00Z", id: "$1", text: "first said" },
     { op: "comment", actor: "jonathan", at: "2026-06-12T17:00:00Z", id: "$1", text: "second said, earlier clock" },
     { op: "show", id: "$1" },
+    { op: "ready" },
   ],
   [
     createOK("$1"),
@@ -1043,6 +1067,7 @@ fx(
         title: "discussed",
       }),
     ),
+    entriesOK([{ id: "$1", priority: 2, title: "discussed", type: "task" }]),
   ],
 );
 
@@ -1054,6 +1079,7 @@ fx(
     { op: "comment", actor: A, at: T1, id: "legacy-ghost", text: "into the void" },
     { op: "comment", actor: A, at: T2, id: "$1" },
     { op: "comment", actor: A, at: "not a clock", id: "$1", text: "skewed" },
+    { op: "comment", actor: A, at: T3, id: "$1", text: 42 },
     { op: "show", id: "$1" },
   ],
   [
@@ -1061,6 +1087,7 @@ fx(
     actErr(["E_UNKNOWN_ID"]),
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_BAD_TIMESTAMP"]),
+    actErr(["E_MISSING_FIELD"]),
     showOK(task({ id: "$1", title: "quiet" })),
   ],
 );
@@ -1099,6 +1126,7 @@ fx(
     { op: "update", actor: A, at: T1, id: "$1" },
     { op: "update", actor: A, at: T1, id: "$1", set: "priority 0" },
     { op: "update", actor: A, at: T2, id: "$1", set: { status: "closed" } },
+    { op: "update", actor: A, at: T2, id: "$1", set: { title: "smuggled alongside", type: "epic" } },
     { op: "update", actor: A, at: T3, id: "$1", set: { priority: 7, title: 9 } },
     { op: "update", actor: A, at: 42, id: "$1", set: { title: "never lands" } },
     { op: "update", actor: A, at: T4, id: "legacy-ghost", set: { title: "no target" } },
@@ -1109,6 +1137,7 @@ fx(
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
     actErr(["E_MISSING_FIELD"]),
+    actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD"]),
     actErr(["E_BAD_FIELD", "E_BAD_PRIORITY"]),
     actErr(["E_MISSING_FIELD"]),
@@ -1317,7 +1346,7 @@ fx(
 
 fx(
   "fx-import-invalid",
-  "One import payload violating many rules at once — id collision with a HELD imported id, within-payload linkage collision, bad type/status/priority vocabulary, an offsetless stamp, a malformed comment, forbidden parent/dependsOn keys, a missing title, a self-link, and a link from an unknown id — reports every code in one sorted set, imports nothing, and the store holds only what it held.",
+  "One import payload violating many rules at once — id collision with a HELD imported id, within-payload linkage collision, bad type/status/priority vocabulary, an offsetless stamp, malformed comments (bad at; missing actor and text), forbidden parent/dependsOn keys, missing required fields, a self-link, a bad link type, a second parent, and a link from an unknown id — reports all ten codes in one sorted set, imports nothing, and the store holds only what it held; an envelope missing actor and at is E_MISSING_FIELD.",
   [
     {
       op: "import", actor: A, at: T0,
@@ -1332,23 +1361,29 @@ fx(
         { createdAt: "2026-01-03T00:00:00", createdBy: A, id: "legacy-2", priority: 9, status: "paused", title: "bad vocabulary", type: "saga" },
         { createdAt: "2026-01-04T00:00:00Z", createdBy: A, dependsOn: ["legacy-1"], id: "legacy-3", parent: "legacy-1", priority: 2, status: "open", title: "forbidden edge keys", type: "task" },
         { createdAt: "2026-01-05T00:00:00Z", createdBy: A, id: "legacy-4", priority: 2, status: "open", type: "task" },
-        { comments: [{ actor: A, at: "2026-01-06T00:00:00", text: "offsetless comment" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-5", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "first of colliding pair", type: "task" },
+        { comments: [{ actor: A, at: "2026-01-06T00:00:00", text: "offsetless comment" }, { at: "2026-01-06T01:00:00Z" }], createdAt: "2026-01-06T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-5", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "first of colliding pair", type: "task" },
         { createdAt: "2026-01-07T00:00:00Z", createdBy: A, criterionId: "ac1", id: "legacy-6", priority: 2, specItemRef: "spec:mini/itX", status: "open", title: "second of colliding pair", type: "task" },
+        { id: "legacy-7", title: "bare bones" },
       ],
       links: [
         { dependsOn: "legacy-1", id: "legacy-9", type: "blocks" },
         { dependsOn: "legacy-1", id: "legacy-1", type: "blocks" },
+        { dependsOn: "legacy-1", id: "legacy-2", type: "strangles" },
+        { dependsOn: "legacy-1", id: "legacy-6", type: "parent-child" },
+        { dependsOn: "legacy-4", id: "legacy-6", type: "parent-child" },
       ],
     },
     { op: "list" },
+    { op: "import", tasks: [] },
   ],
   [
     importOK(1),
     importErr([
       "E_BAD_FIELD", "E_BAD_PRIORITY", "E_BAD_TIMESTAMP", "E_BAD_TYPE",
-      "E_CYCLE", "E_DUP_ID", "E_DUP_LINKAGE", "E_MISSING_FIELD", "E_UNKNOWN_ID",
+      "E_CYCLE", "E_DUP_ID", "E_DUP_LINKAGE", "E_HAS_PARENT", "E_MISSING_FIELD", "E_UNKNOWN_ID",
     ]),
     entriesOK([{ id: "legacy-1", priority: 2, status: "open", title: "held import", type: "task" }]),
+    importErr(["E_MISSING_FIELD"]),
   ],
 );
 
