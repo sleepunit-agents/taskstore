@@ -561,7 +561,7 @@ function doImport(state: StoreState, c: Command): Result {
       "description", "assignee", "startedAt", "closedAt", "closeReason",
       "legacyRef", "specItemRef", "criterionId",
     ] as const)
-      if (raw[f] !== undefined) (task as Record<string, unknown>)[f] = raw[f];
+      if (raw[f] !== undefined) (task as unknown as Record<string, unknown>)[f] = raw[f];
     state.tasks.push(task);
   }
   state.links = prospective;

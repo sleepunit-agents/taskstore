@@ -14,6 +14,7 @@
     "self-verify": "tsx scripts/self-verify.ts"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
     "felag": "file:../felag",
     "tsx": "^4.19.0",
