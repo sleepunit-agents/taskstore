@@ -451,3 +451,18 @@ ready tie-break across the import boundary left as carried-by-composition
 extension plus the existing tie-break fixture.
 
 Corpus after round 10: 8 items, 35 criteria, 39 fixtures.
+
+## Cold review round 11 — REWORK (2026-06-12)
+
+All 39 traced clean (all 11 error codes exercised, every committed
+co-fire pair carried, no orphans). One borderline MAJOR: the rejected
+upper priority edge — out-of-range-high was only ever 7 and 9, so a
+0..5/6/7/8 bound survived. priority 5 → E_BAD_PRIORITY pinned on create
+and update. Five NITs folded: ready's "never by id" formally ceded as a
+new preamble residue ($-token normalization makes id order and creation
+order structurally inseparable in fixtures — a genuine interchange
+limit, the round's best find); leap-second rejection on comment;
+non-string closeReason isolated on a legal target; imported blocks edge
+surfacing in show.dependsOn; numeric comment at inside an import record.
+
+Corpus after round 11: 8 items, 35 criteria, 39 fixtures.
