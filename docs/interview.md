@@ -190,3 +190,43 @@ binding). Dolt-style sync, federation: not this contract's business.
 
 8 items planned, each ≤7 criteria (A2); all interview-authored criteria
 source `forethought`, state `active` (merge ratifies — felag-core precedent).
+
+## Cold review round 1 — REWORK (2026-06-12)
+
+All 36 fixtures traced clean ("no wrong expected value in any fixture");
+every finding was the family's signature defect class — prose commitments
+without discriminating fixtures. Eight MAJORs, all folded:
+
+1. **Co-fire contradiction** between it-ts-model ("inputs field-valid") and
+   it-ts-lifecycle (co-fires with field errors) — caught independently by
+   the author mid-implementation, confirmed by the reviewer. Resolved:
+   referent-interrogating checks are gated ONLY by what they interrogate;
+   fx-close-closed now pins the triple co-fire
+   {E_BAD_FIELD, E_BAD_TIMESTAMP, E_BAD_TRANSITION} on a known target.
+2. Lone criterionId → E_MISSING_FIELD unfixtured — new fx-create-invalid.
+3. Idempotent-hit field survival never observed — fx-linkage-idempotent now
+   shows the holder after colliding proposals with different title/priority.
+4. **Creation order never discriminated from timestamp order** anywhere
+   monotonic clocks ran through the whole corpus. fx-ready-sort, fx-list,
+   and fx-export now carry timestamps in reverse of creation order.
+5. Import per-record validation entirely unfixtured (the largest hole) —
+   new fx-import-invalid: seven codes in one sorted set, collision against
+   a HELD id, atomicity over a rich payload.
+6. Present-but-mistyped required fields → E_MISSING_FIELD unfixtured —
+   fx-create-invalid (title: 9, at: 42).
+7. Multi-edge dependsOn/links ordering unfixtured (id-order impostor
+   survived) — fx-link now adds two edges in anti-id order.
+8. $-token numbering ("counting neither failed creates nor idempotent
+   hits") undiscriminated — fx-timestamp-bad gains a success-after-failures
+   ($1, not $3); fx-linkage-idempotent a fresh create after hits ($2, not
+   $4); new criterion ac-ts-normalization carries both.
+
+All eight NITs folded too (unknown $-token referent, non-string close
+reason, mistyped optionals, set absent/non-object, claim-closed +
+reopen-in_progress, priority boundary 4 / -1 / "high", parent-unknown
+co-fire, taskRef-tertiary-vacuous note in it-ts-query).
+
+Corpus after round 1: 8 items, 35 criteria, 38 fixtures. Implementation
+(written against the draft while the reviewer ran) passed all amended
+fixtures without change — the co-fire semantics it implemented were the
+ones ratified.
