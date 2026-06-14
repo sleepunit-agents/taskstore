@@ -16,7 +16,7 @@ const outDir = join(here, "..", "spec", "taskstore-core");
 const preamble = {
   record: "preamble",
   name: "taskstore-core",
-  conformanceVersion: "0.1.0",
+  conformanceVersion: "0.2.0",
   goals: [
     "Carry exactly the working surface six months of agent-driven tracking actually used — ready queue, parent/child containers, priorities, claim/close lifecycle, comments, ad-hoc and spec-linked tasks — and refuse the junk drawer loudly.",
     "The core is one pure transition function over (state, command): the clock and the actor ride in the command, queries are the only observable, and every behavior is fixtured; storage, CLI, and scheduling live in bindings.",
@@ -36,7 +36,7 @@ const preamble = {
     "CLI and MCP surface: verb spellings, flags, output formatting, trees, emoji, and human-facing rendering are binding surface; only the command/result values are contract.",
     "Sync, federation, remotes, and multi-writer concurrency: one store, one writer at a time; concurrent reads are the binding's business.",
     "Id generation scheme beyond the judgment criterion ac-ts-id-shape: random suffixes, dotted children, and sequences are implementation surface. Fixture corpora place caller-supplied ids in a 'legacy-' namespace and assume generated ids never collide with them; a generator emitting ids in that namespace fails those fixtures spuriously.",
-    "Deferred, not refused (arrive as proposed criteria via promotion if wanted): defer/snooze and a deferred status, labels/tags, full-text search, stats and dashboards, stale/orphan hygiene tooling, batch mutations, task deletion, and re-alerting/notification of any kind.",
+    "Deferred, not refused (arrive as proposed criteria via promotion if wanted): defer/snooze and a deferred status, labels/tags, stats and dashboards, stale/orphan hygiene tooling, batch mutations, and re-alerting/notification of any kind. (delete and search were on this list through 0.1.0; 0.2.0 promotes them into the contract — it-ts-lifecycle and it-ts-query.)",
     "Automation around the store: hooks, timers, Discord delivery, audit-trail rendering of actor/at on mutations that do not stamp observable fields (update, comment metadata beyond the comment record, import's envelope actor/at) — recorded or not as the binding pleases; not observable here.",
     "Actor identity and authentication: actor is a free-form attribution string with no semantics (felag-tasks precedent).",
     "Import stamp cross-consistency: import validates identity, vocabulary, timestamps, and link structure; whether a closed record carries closedAt or an in_progress record carries startedAt is the exporter's business — records are held verbatim.",
@@ -179,7 +179,9 @@ item(
 
 claim {id, actor, at}: requires status open; sets status in_progress, assignee = actor, startedAt = at. close {id, actor, at, reason?}: requires status open or in_progress; sets status closed, closedAt = at, and closeReason = reason when present (reason optional string; E_BAD_FIELD when present non-string); fields stamped by an earlier claim survive. reopen {id, actor, at}: requires status closed; returns the task to open and REMOVES startedAt, assignee, closedAt, and closeReason — the claim and close stamps do not survive a reopen; history that matters belongs in comments.
 
-A lifecycle command whose target's status is outside its requirement reports E_BAD_TRANSITION: claiming a task already in_progress or closed, closing a closed task, reopening anything not closed. Per it-ts-model, E_BAD_TRANSITION is a referent-interrogating check: it co-fires with field errors (a bad at and a bad transition both report) but is not evaluated when the id is unknown — E_UNKNOWN_ID reports alone with the field errors. A failed lifecycle command changes nothing: stamps and status hold their prior values exactly.`,
+A lifecycle command whose target's status is outside its requirement reports E_BAD_TRANSITION: claiming a task already in_progress or closed, closing a closed task, reopening anything not closed. Per it-ts-model, E_BAD_TRANSITION is a referent-interrogating check: it co-fires with field errors (a bad at and a bad transition both report) but is not evaluated when the id is unknown — E_UNKNOWN_ID reports alone with the field errors. A failed lifecycle command changes nothing: stamps and status hold their prior values exactly.
+
+delete {id, actor, at}: removes the task from the store entirely — the escape hatch for an erroneously-created task, which no other command provides (close is a status, not a removal). E_UNKNOWN_ID on an unknown or unresolved id, reported alone with any field errors per it-ts-model. delete admits a task in any status (no E_BAD_TRANSITION) and cascades: every link the task held as either endpoint — blocks or parent-child — is dropped, so the graph stays consistent (a deleted blocker unblocks its dependents, a deleted parent frees its children). A failed delete changes nothing.`,
 );
 
 must(
@@ -205,6 +207,12 @@ must(
   "it-ts-lifecycle",
   "Given lifecycle commands whose targets are in the wrong status — re-claiming in_progress, claiming closed, closing closed, reopening in_progress — or unknown (literal or unresolved $-token), or addressed with invalid fields\nWhen they run\nThen wrong-status targets report E_BAD_TRANSITION, which CO-FIRES with field errors on a known target (a non-string reason and an offsetless at report alongside it) but never fires on an unknown id, and every failed command leaves status and stamps exactly as they were",
   ["fx-claim-bad", "fx-close-closed"],
+);
+must(
+  "ac-ts-delete",
+  "it-ts-lifecycle",
+  "Given a held task, a task that blocks another, an unknown id, and a delete with no id\nWhen delete runs on each\nThen the held task is removed — show reports E_UNKNOWN_ID and list no longer carries it; the blocker's removal cascades its link so the formerly-blocked task becomes ready; the unknown id reports E_UNKNOWN_ID; and the id-less delete reports E_MISSING_FIELD",
+  ["fx-delete", "fx-delete-cascade", "fx-delete-unknown"],
 );
 
 // -- it-ts-ready -------------------------------------------------------------
@@ -329,7 +337,9 @@ item(
 
 list {status?}: entries for tasks in creation order — the order they entered the store, imports included (it-ts-portability). Entry shape: {id, priority, status, title, type}, plus parent exactly when held. The status filter, when present, must be one of open | in_progress | closed (else E_BAD_FIELD with entries []) and restricts entries to tasks of that status. No filter means every task, whatever its status.
 
-report: the c-tasks projection, natively. Entries for every spec-linked task — every task holding a specItemRef — with shape {criterionId?, specItemRef, status, taskRef} where taskRef is the task's id, sorted ascending by (specItemRef, criterionId, taskRef) with absent criterionId before any present value (under linkage uniqueness the taskRef key is never decisive — two spec-linked tasks cannot share a (specItemRef, criterionId) key, absent criterionId being a key value; the tertiary key is retained verbatim for c-tasks alignment). Status mapping: open -> open; in_progress -> in_progress; closed -> done, EXCEPT closed with closeReason exactly "cancelled" — full-string, case-sensitive — which maps to cancelled. Tasks without specItemRef never appear. This projection is the store-side half of felag-tasks conformance: a WorkLayer over this store maps propose to create, transition-to-cancelled to close with reason "cancelled", and report to report.`,
+report: the c-tasks projection, natively. Entries for every spec-linked task — every task holding a specItemRef — with shape {criterionId?, specItemRef, status, taskRef} where taskRef is the task's id, sorted ascending by (specItemRef, criterionId, taskRef) with absent criterionId before any present value (under linkage uniqueness the taskRef key is never decisive — two spec-linked tasks cannot share a (specItemRef, criterionId) key, absent criterionId being a key value; the tertiary key is retained verbatim for c-tasks alignment). Status mapping: open -> open; in_progress -> in_progress; closed -> done, EXCEPT closed with closeReason exactly "cancelled" — full-string, case-sensitive — which maps to cancelled. Tasks without specItemRef never appear. This projection is the store-side half of felag-tasks conformance: a WorkLayer over this store maps propose to create, transition-to-cancelled to close with reason "cancelled", and report to report.
+
+search {q, status?}: entries for tasks whose id, title, description, specItemRef, criterionId, or legacyRef contains q as a case-insensitive substring — the text retrieval list lacks (list filters only by status). Entry shape and creation order are list's; the optional status filter further restricts to that status (one of open | in_progress | closed, else E_BAD_FIELD with entries []). A missing or non-string q reports E_MISSING_FIELD with entries []. The spec-link fields are searchable, so a criterionId or specItemRef term finds its linked tasks.`,
 );
 
 must(
@@ -355,6 +365,12 @@ must(
   "it-ts-query",
   "Given closed spec-linked tasks with closeReason \"cancelled\", \"shipped\", and \"Cancelled\"\nWhen report runs\nThen exactly the lowercase-\"cancelled\" task projects to cancelled and the others project to done — the match is full-string and case-sensitive",
   ["fx-report-cancelled"],
+);
+must(
+  "ac-ts-search",
+  "it-ts-query",
+  "Given tasks whose text-bearing fields carry distinct terms — a title, and a criterionId on a spec-linked task\nWhen search runs for a title term, for an UPPERCASED criterionId (case-insensitive), for a term in no task, and with no query at all\nThen each field term returns exactly its carrying task in list shape, the uppercased query still hits the criterionId, the no-match returns no entries, and the missing query reports E_MISSING_FIELD with entries []",
+  ["fx-search"],
 );
 
 // -- it-ts-portability -------------------------------------------------------
@@ -1649,6 +1665,84 @@ fx(
       createdAt: "2026-01-06T00:00:00Z", createdBy: A, dependsOn: ["legacy-a"],
       id: "legacy-b", priority: 3, status: "closed", title: "abandoned", type: "task",
     }),
+  ],
+);
+
+// -- delete + search (promoted into the contract at 0.2.0)
+
+fx(
+  "fx-delete",
+  "delete removes a task entirely: after it, show reports E_UNKNOWN_ID and list is empty — the only way to take an erroneously-created task out of the store.",
+  [
+    { op: "create", title: "junk probe", actor: A, at: "2026-06-14T10:00:00Z" },
+    { op: "delete", id: "$1", actor: A, at: "2026-06-14T10:01:00Z" },
+    { op: "show", id: "$1" },
+    { op: "list" },
+  ],
+  [
+    { created: true, errors: [], id: "$1", ok: true },
+    { errors: [], ok: true },
+    { errors: ["E_UNKNOWN_ID"], ok: false, task: null },
+    { entries: [], errors: [], ok: true },
+  ],
+);
+fx(
+  "fx-delete-unknown",
+  "delete on an unknown id reports E_UNKNOWN_ID; a delete missing its id reports E_MISSING_FIELD; neither changes the store.",
+  [
+    { op: "delete", id: "legacy-gone", actor: A, at: "2026-06-14T10:00:00Z" },
+    { op: "delete", actor: A, at: "2026-06-14T10:00:00Z" },
+  ],
+  [
+    { errors: ["E_UNKNOWN_ID"], ok: false },
+    { errors: ["E_MISSING_FIELD"], ok: false },
+  ],
+);
+fx(
+  "fx-delete-cascade",
+  "deleting a blocker cascades its link: the formerly-blocked task becomes ready and shows an empty dependsOn — the graph stays consistent.",
+  [
+    { op: "create", title: "blocker A", actor: A, at: "2026-06-14T10:00:00Z" },
+    { op: "create", title: "task B", actor: A, at: "2026-06-14T10:01:00Z" },
+    { op: "link", id: "$2", dependsOn: "$1", type: "blocks", actor: A, at: "2026-06-14T10:02:00Z" },
+    { op: "ready" },
+    { op: "delete", id: "$1", actor: A, at: "2026-06-14T10:03:00Z" },
+    { op: "ready" },
+    { op: "show", id: "$2" },
+  ],
+  [
+    { created: true, errors: [], id: "$1", ok: true },
+    { created: true, errors: [], id: "$2", ok: true },
+    { errors: [], ok: true },
+    { entries: [{ id: "$1", priority: 2, title: "blocker A", type: "task" }], errors: [], ok: true },
+    { errors: [], ok: true },
+    { entries: [{ id: "$2", priority: 2, title: "task B", type: "task" }], errors: [], ok: true },
+    {
+      errors: [], ok: true,
+      task: { comments: [], createdAt: "2026-06-14T10:01:00Z", createdBy: A, dependsOn: [], id: "$2", priority: 2, status: "open", title: "task B", type: "task" },
+    },
+  ],
+);
+fx(
+  "fx-search",
+  "search matches q as a case-insensitive substring over the text-bearing fields (id/title/description/specItemRef/criterionId/legacyRef); a no-match returns [] and a missing q reports E_MISSING_FIELD.",
+  [
+    { op: "create", title: "Fix the parser", description: "UTF-8 handling", actor: A, at: "2026-06-14T10:00:00Z" },
+    { op: "create", title: "Write the docs", specItemRef: "spec:mini/it1", criterionId: "ac-render", actor: A, at: "2026-06-14T10:01:00Z" },
+    { op: "create", title: "Deploy service", actor: A, at: "2026-06-14T10:02:00Z" },
+    { op: "search", q: "parser" },
+    { op: "search", q: "AC-RENDER" },
+    { op: "search", q: "nomatch-term" },
+    { op: "search" },
+  ],
+  [
+    { created: true, errors: [], id: "$1", ok: true },
+    { created: true, errors: [], id: "$2", ok: true },
+    { created: true, errors: [], id: "$3", ok: true },
+    { entries: [{ id: "$1", priority: 2, status: "open", title: "Fix the parser", type: "task" }], errors: [], ok: true },
+    { entries: [{ id: "$2", priority: 2, status: "open", title: "Write the docs", type: "task" }], errors: [], ok: true },
+    { entries: [], errors: [], ok: true },
+    { entries: [], errors: ["E_MISSING_FIELD"], ok: false },
   ],
 );
 

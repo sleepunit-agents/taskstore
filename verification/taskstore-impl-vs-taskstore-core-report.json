@@ -1,6 +1,6 @@
 {
   "advisory": [],
-  "conformanceVersion": "0.1.0",
+  "conformanceVersion": "0.2.0",
   "disputed": [],
   "failing": [],
   "implementation": "taskstore-impl",

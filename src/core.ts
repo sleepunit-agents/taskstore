@@ -53,6 +53,9 @@ const TYPES: readonly string[] = ["task", "bug", "feature", "epic"];
 const STATUSES: readonly string[] = ["open", "in_progress", "closed"];
 const LINK_TYPES: readonly string[] = ["blocks", "parent-child"];
 const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title"];
+const SEARCH_FIELDS: readonly string[] = [
+  "id", "title", "description", "specItemRef", "criterionId", "legacyRef",
+];
 
 // "Parseable" per felag-core it-verification's Timestamps rule (incorporated
 // by reference in it-ts-model): RFC 3339 date-time, case-insensitive T/Z,
@@ -206,6 +209,8 @@ function dispatch(state: StoreState, c: Command): Result {
       return doLifecycle(state, c, "close");
     case "reopen":
       return doLifecycle(state, c, "reopen");
+    case "delete":
+      return doDelete(state, c);
     case "update":
       return doUpdate(state, c);
     case "comment":
@@ -216,6 +221,8 @@ function dispatch(state: StoreState, c: Command): Result {
       return doShow(state, c);
     case "list":
       return doList(state, c);
+    case "search":
+      return doSearch(state, c);
     case "ready":
       return doReady(state);
     case "report":
@@ -312,6 +319,23 @@ function doLifecycle(state: StoreState, c: Command, kind: "claim" | "close" | "r
   return { errors: [], ok: true };
 }
 
+function doDelete(state: StoreState, c: Command): Result {
+  const errs = new Errs();
+  reqString(errs, c.id);
+  reqString(errs, c.actor);
+  reqAt(errs, c.at);
+  const task = isString(c.id) ? findTask(state, c.id) : undefined;
+  if (isString(c.id) && task === undefined) errs.add("E_UNKNOWN_ID");
+  if (errs.any) return { errors: errs.list(), ok: false };
+  // Hard removal — the escape hatch for an erroneously-created task (there is
+  // no other way to take one out of the store). Cascades every link the task
+  // participated in (either endpoint), so the graph stays consistent: a deleted
+  // blocker unblocks its dependents, a deleted parent frees its children.
+  state.tasks = state.tasks.filter((t) => t.id !== c.id);
+  state.links = state.links.filter((l) => l.id !== c.id && l.dependsOn !== c.id);
+  return { errors: [], ok: true };
+}
+
 function doUpdate(state: StoreState, c: Command): Result {
   const errs = new Errs();
   reqString(errs, c.id);
@@ -403,6 +427,25 @@ function doList(state: StoreState, c: Command): Result {
     return { entries: [], errors: ["E_BAD_FIELD"], ok: false };
   const entries = state.tasks
     .filter((t) => c.status === undefined || t.status === c.status)
+    .map((t) => listEntry(state, t));
+  return { entries, errors: [], ok: true };
+}
+
+function doSearch(state: StoreState, c: Command): Result {
+  if (!isString(c.q)) return { entries: [], errors: ["E_MISSING_FIELD"], ok: false };
+  if (c.status !== undefined && !(isString(c.status) && STATUSES.includes(c.status)))
+    return { entries: [], errors: ["E_BAD_FIELD"], ok: false };
+  // Case-insensitive substring match over the text-bearing fields (the retrieval
+  // `list` lacks — it filters only by status). Same listEntry shape as list/ready.
+  const q = c.q.toLowerCase();
+  const entries = state.tasks
+    .filter((t) => c.status === undefined || t.status === c.status)
+    .filter((t) =>
+      SEARCH_FIELDS.some((f) => {
+        const v = (t as unknown as Record<string, unknown>)[f];
+        return isString(v) && v.toLowerCase().includes(q);
+      }),
+    )
     .map((t) => listEntry(state, t));
   return { entries, errors: [], ok: true };
 }

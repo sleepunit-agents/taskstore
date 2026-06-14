@@ -7,11 +7,11 @@
 //   taskstore ready
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
-//   taskstore claim <id> | close <id> [--reason r] | reopen <id>
+//   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
 //   taskstore link <id> <dependsOn> [--type blocks|parent-child]
-//   taskstore show <id> | list [--status s] | report | export
+//   taskstore show <id> | list [--status s] | search <query> [--status s] | report | export
 //   taskstore import <payload.json>
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
@@ -59,6 +59,8 @@ function buildCommand(): Command {
     }
     case "reopen":
       return { op: "reopen", id: positional[0], actor, at };
+    case "delete":
+      return { op: "delete", id: positional[0], actor, at };
     case "update": {
       const set: Record<string, unknown> = {};
       for (const k of ["title", "description", "assignee"]) if (flags[k] !== undefined) set[k] = flags[k];
@@ -76,6 +78,11 @@ function buildCommand(): Command {
       if (flags.status !== undefined) c.status = flags.status;
       return c;
     }
+    case "search": {
+      const c: Command = { op: "search", q: positional[0] };
+      if (flags.status !== undefined) c.status = flags.status;
+      return c;
+    }
     case "ready":
       return { op: "ready" };
     case "report":
@@ -88,7 +95,7 @@ function buildCommand(): Command {
     }
     default:
       console.error(
-        "usage: taskstore <create|claim|close|reopen|update|comment|link|show|list|ready|report|export|import> ...",
+        "usage: taskstore <create|claim|close|reopen|delete|update|comment|link|show|list|search|ready|report|export|import> ...",
       );
       process.exit(2);
   }

@@ -13,7 +13,7 @@ import { TaskstoreWorkLayer } from "../src/work-layer.js";
 import type { Command } from "../src/core.js";
 
 const IMPLEMENTATION = "taskstore-impl";
-const IMPLEMENTATION_VERSION = "0.1.0";
+const IMPLEMENTATION_VERSION = "0.2.0";
 const here = import.meta.dirname;
 const at = new Date().toISOString();
 
