@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
   "type": "module",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "exports": {
     ".": "./dist/index.js"
   },
