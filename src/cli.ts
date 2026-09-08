@@ -52,6 +52,8 @@ function buildCommand(): Command {
     }
     case "claim":
       return { op: "claim", id: positional[0], actor, at };
+    case "unclaim":
+      return { op: "unclaim", id: positional[0], actor, at };
     case "close": {
       const c: Command = { op: "close", id: positional[0], actor, at };
       if (flags.reason !== undefined) c.reason = flags.reason;
@@ -95,11 +97,12 @@ function buildCommand(): Command {
     }
     default:
       console.error(
-        "usage: taskstore <create|claim|close|reopen|delete|update|comment|link|show|list|search|ready|report|export|import> ...",
+        "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|show|list|search|ready|report|export|import> ...",
       );
       process.exit(2);
   }
 }
+
 
 const command = buildCommand();
 mkdirSync(dirname(dbPath), { recursive: true });

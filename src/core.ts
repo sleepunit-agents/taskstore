@@ -205,6 +205,8 @@ function dispatch(state: StoreState, c: Command): Result {
       return doCreate(state, c);
     case "claim":
       return doLifecycle(state, c, "claim");
+    case "unclaim":
+      return doLifecycle(state, c, "unclaim");
     case "close":
       return doLifecycle(state, c, "close");
     case "reopen":
@@ -283,7 +285,7 @@ function doCreate(state: StoreState, c: Command): Result {
   return { created: true, errors: [], id, ok: true };
 }
 
-function doLifecycle(state: StoreState, c: Command, kind: "claim" | "close" | "reopen"): Result {
+function doLifecycle(state: StoreState, c: Command, kind: "claim" | "unclaim" | "close" | "reopen"): Result {
   const errs = new Errs();
   reqString(errs, c.id);
   reqString(errs, c.actor);
@@ -295,6 +297,7 @@ function doLifecycle(state: StoreState, c: Command, kind: "claim" | "close" | "r
   // task exists; co-fires with any field errors (it-ts-lifecycle).
   if (task) {
     if (kind === "claim" && task.status !== "open") errs.add("E_BAD_TRANSITION");
+    if (kind === "unclaim" && task.status !== "in_progress") errs.add("E_BAD_TRANSITION");
     if (kind === "close" && task.status === "closed") errs.add("E_BAD_TRANSITION");
     if (kind === "reopen" && task.status !== "closed") errs.add("E_BAD_TRANSITION");
   }
@@ -305,6 +308,10 @@ function doLifecycle(state: StoreState, c: Command, kind: "claim" | "close" | "r
     t.status = "in_progress";
     t.assignee = c.actor as string;
     t.startedAt = c.at as string;
+  } else if (kind === "unclaim") {
+    t.status = "open";
+    delete t.startedAt;
+    delete t.assignee;
   } else if (kind === "close") {
     t.status = "closed";
     t.closedAt = c.at as string;
