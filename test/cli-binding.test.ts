@@ -20,7 +20,7 @@
 // shape of the failing user command.
 
 import Database from "better-sqlite3";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +28,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { SqliteStore } from "../src/sqlite-store.js";
 
 const repo = join(__dirname, "..");
-const cli = `'${join(repo, "node_modules", ".bin", "tsx")}' '${join(repo, "src", "cli.ts")}'`;
+// The BUILT artifact, not the TypeScript source through a loader. The bug was
+// reported against `node dist/cli.js` — what the installed launcher runs — and
+// this is the project's only process-level suite, so anything tsc introduces
+// between src and dist has to be inside what it covers.
+const cli = `node '${join(repo, "dist", "cli.js")}'`;
 
 let dir: string;
 let dbPath: string;
@@ -38,8 +42,10 @@ interface Run {
   code: number;
 }
 
-// One shell command, run with the temp store bound. Returns the shell's exit
-// status, which is the CLI's own for a bare command.
+// One shell command, run with the temp store bound. `code` is the SHELL's exit
+// status — which is the CLI's own only for a bare command. In a pipeline it is
+// the LAST stage's, so every test below that pipes captures the CLI's status
+// through statusOf() instead of reading this.
 function sh(command: string): Promise<Run> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -54,7 +60,21 @@ function sh(command: string): Promise<Run> {
   });
 }
 
+// The CLI's own status from inside a pipeline, written to a file by the
+// subshell that runs it. POSIX sh has no pipefail, and the shell's status is
+// the reader's — so a CLI that crashed mid-pipeline would otherwise be
+// reported as whatever `cat` thought of it.
+let statusSeq = 0;
+async function statusOf(cliArgs: string, rest: string): Promise<number> {
+  const stFile = join(dir, `status-${statusSeq++}`);
+  await sh(`( ${cli} ${cliArgs}; echo $? > '${stFile}' ) ${rest}`);
+  return Number(readFileSync(stFile, "utf8").trim());
+}
+
 beforeAll(() => {
+  // Build once, so `cli` above is the current source. tsc is a couple of
+  // seconds and dist/ is gitignored, so this costs nothing a developer keeps.
+  execFileSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
   dir = mkdtempSync(join(tmpdir(), "taskstore-cli-"));
   dbPath = join(dir, "store.db");
   const store = new SqliteStore(dbPath);
@@ -86,10 +106,14 @@ describe("stdout survives a pipe", () => {
     const direct = join(dir, "direct.jsonl");
     const piped = join(dir, "piped.jsonl");
     expect((await sh(`${cli} export > '${direct}'`)).code).toBe(0);
-    expect((await sh(`${cli} export | cat > '${piped}'`)).code).toBe(0);
+    expect(await statusOf("export", `| cat > '${piped}'`)).toBe(0);
 
     expect(statSync(direct).size).toBeGreaterThan(65536); // else this proves nothing
     expect(statSync(piped).size).toBe(statSync(direct).size);
+    // Byte equality across two runs is safe to assert because core.ts's
+    // doExport is a pure function of state — it clones tasks and links and
+    // adds no timestamp, sequence, or other per-run field. If that ever gains
+    // one, compare sizes and parsed content instead of raw bytes.
     expect(readFileSync(piped).equals(readFileSync(direct))).toBe(true);
   });
 
@@ -98,10 +122,33 @@ describe("stdout survives a pipe", () => {
     // The failure this catches is silent twice over: output cut mid-token AND
     // an exit status of 0 claiming success. `cat` is the stand-in for the jq
     // the README invites, which would see a parse error rather than a prefix.
-    expect((await sh(`${cli} list | cat > '${piped}'`)).code).toBe(0);
+    expect(await statusOf("list", `| cat > '${piped}'`)).toBe(0);
     expect(statSync(piped).size).toBeGreaterThan(65536);
     const parsed = JSON.parse(readFileSync(piped, "utf8")) as { entries: unknown[] };
     expect(parsed.entries.length).toBe(120);
+  });
+
+  // The other half of draining on the event loop: the reader is now allowed to
+  // hang up mid-write, and the queued write fails against a closed pipe. An
+  // unhandled EPIPE would crash with a stack trace at exit 1 — "command
+  // rejected" — for a command that succeeded, which is a worse contract
+  // violation than the truncation this change removes.
+  //
+  // Say what this test is, precisely: it is a LOCK, not a witness. Mutation-
+  // tested 2026-09-08 — it passes identically with and without cli.ts's
+  // process.stdout EPIPE handler, because Node 24 already discards EPIPE on
+  // stdout internally. It fails if a future runtime stops doing that and the
+  // handler is missing, which is the whole reason both exist. Do not read a
+  // green here as evidence that the handler works.
+  it("survives a reader that stops early, at the status the command earned", async () => {
+    const err = join(dir, "epipe.err");
+    expect(await statusOf("export", `2> '${err}' | head -c 100 > /dev/null`)).toBe(0);
+    expect(readFileSync(err, "utf8")).toBe("");
+
+    // A reader that never reads a byte, and one on a rejected command: the
+    // status still belongs to the command, not to the pipe.
+    expect(await statusOf("export", `2>> '${err}' | true`)).toBe(0);
+    expect(await statusOf("claim t-nonexistent", `2>> '${err}' | true`)).toBe(1);
   });
 });
 

@@ -35,6 +35,24 @@ for (let i = 0; i < argv.length; i++) {
   } else positional.push(a);
 }
 
+// A consumer is allowed to stop reading early — `| head`, `| jq ... | head`,
+// a pager quit on the first screen. Once stdout drains on the event loop
+// rather than at exit (see the foot of this file), the queued write outlives
+// the closed pipe and fails, and an unhandled 'error' on process.stdout would
+// crash with a stack trace and exit 1 — the status this CLI defines as
+// "command rejected", for a command that did nothing wrong.
+//
+// Node 24 does not currently do that: measured 2026-09-08, `export | head -1`,
+// `list | head -c 100` and `export | true` each left the CLI's own status 0
+// with empty stderr, because Node's internal stdout handling already discards
+// EPIPE. This handler is here so that behavior is the contract's rather than
+// the runtime's, on every version. A reader hanging up is not an error the
+// caller asked about, so keep whatever status the command earned.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(process.exitCode === undefined ? 0 : Number(process.exitCode));
+  throw err;
+});
+
 const actor = process.env.TASKSTORE_ACTOR ?? "art";
 const at = new Date().toISOString();
 const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"));
