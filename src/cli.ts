@@ -107,6 +107,13 @@ function buildCommand(): Command {
       console.error(
         "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|unlink|show|list|search|ready|report|export|import> ...",
       );
+      // This exit() stays, unlike the one at the end of the file. It is the
+      // only way out of a branch that owes the caller a Command and has none
+      // — setting process.exitCode here would fall through and run the whole
+      // command path on `undefined`. It is also safe on the grounds the other
+      // one was not: nothing has been written to stdout yet, and the single
+      // short line above fits any pipe buffer, so there is no queued write to
+      // discard.
       process.exit(2);
   }
 }
@@ -158,4 +165,15 @@ console.log(JSON.stringify(result, null, 2));
 // failure, so the status has to carry the difference. 0 removed it, 3 the
 // command was fine but no edge matched, 1 the command was rejected, 2 usage.
 const missedUnlink = command.op === "unlink" && result.ok === true && result.removed !== true;
-process.exit(result.ok !== true ? 1 : missedUnlink ? 3 : 0);
+// SET the status; do not process.exit() on it. stdout to a pipe is written
+// through a non-blocking fd: a write larger than the 64 KiB buffer is queued
+// and drained on later ticks, and process.exit() ends the process without
+// draining, discarding the rest at exit 0. `taskstore export` measured
+// 1,768,451 bytes to a file and exactly 65,536 down a pipe on 2026-09-08 —
+// so `taskstore export | gzip > backup.gz` was writing a 4%-complete backup
+// of the exit door and reporting success. A file fd is written synchronously,
+// which is the only reason this was survivable long enough to ship.
+// Nothing holds the loop open here: the store is closed above and
+// better-sqlite3 is synchronous, so the process still ends as soon as stdout
+// is flushed — with the whole output and the same four statuses.
+process.exitCode = result.ok !== true ? 1 : missedUnlink ? 3 : 0;
