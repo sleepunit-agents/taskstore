@@ -1,6 +1,6 @@
 {
   "name": "taskstore",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
   "type": "module",
   "license": "AGPL-3.0-only",
