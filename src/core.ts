@@ -219,6 +219,8 @@ function dispatch(state: StoreState, c: Command): Result {
       return doComment(state, c);
     case "link":
       return doLink(state, c);
+    case "unlink":
+      return doUnlink(state, c);
     case "show":
       return doShow(state, c);
     case "list":
@@ -418,6 +420,42 @@ function doLink(state: StoreState, c: Command): Result {
   if (errs.any) return { errors: errs.list(), ok: false };
   state.links.push({ id: from!.id, dependsOn: to!.id, type: type! });
   return { errors: [], ok: true };
+}
+
+// link's inverse. Validation is link's, verbatim — the same required fields,
+// the same vocabulary, the same referent rules — because an inverse that
+// accepts a command link would have rejected is not an inverse. No graph
+// checks: removing an edge can neither close a cycle nor give a task a
+// second parent.
+//
+// An unlink naming no held edge is ACCEPTED and changes nothing, mirroring
+// link's treatment of a duplicate. The two are then total inverses and both
+// are idempotent, which is what a store whose exit door is a replayable
+// mirror needs. The no-op is not silent, though: removed distinguishes the
+// removal from the miss exactly as created distinguishes a fresh task from
+// an idempotent hit. A caller who reversed the direction sees removed false
+// rather than a success it can mistake for a repair.
+function doUnlink(state: StoreState, c: Command): Result {
+  const errs = new Errs();
+  reqString(errs, c.id);
+  reqString(errs, c.dependsOn);
+  reqString(errs, c.actor);
+  reqAt(errs, c.at);
+  let type: LinkType | undefined;
+  if (c.type === undefined) errs.add("E_MISSING_FIELD");
+  else if (!isString(c.type) || !LINK_TYPES.includes(c.type)) errs.add("E_BAD_TYPE");
+  else type = c.type as LinkType;
+  const from = isString(c.id) ? findTask(state, c.id) : undefined;
+  const to = isString(c.dependsOn) ? findTask(state, c.dependsOn) : undefined;
+  if ((isString(c.id) && from === undefined) || (isString(c.dependsOn) && to === undefined))
+    errs.add("E_UNKNOWN_ID");
+  if (errs.any) return { errors: errs.list(), ok: false, removed: false };
+
+  const before = state.links.length;
+  state.links = state.links.filter(
+    (l) => !(l.id === from!.id && l.dependsOn === to!.id && l.type === type!),
+  );
+  return { errors: [], ok: true, removed: state.links.length < before };
 }
 
 function doShow(state: StoreState, c: Command): Result {

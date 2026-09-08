@@ -10,7 +10,8 @@
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
-//   taskstore link <id> <dependsOn> [--type blocks|parent-child]
+//   taskstore link <id> <dependsOn> --type blocks|parent-child
+//   taskstore unlink <id> <dependsOn> --type blocks|parent-child
 //   taskstore show <id> | list [--status s] | search <query> [--status s] | report | export
 //   taskstore import <payload.json>
 //
@@ -71,8 +72,14 @@ function buildCommand(): Command {
     }
     case "comment":
       return { op: "comment", id: positional[0], text: positional[1], actor, at };
+    // --type is passed through ABSENT when absent. It used to default to
+    // "blocks", which meant a missing flag silently built the edge that gates
+    // the ready queue; the core has always required the field (E_MISSING_FIELD)
+    // and the binding was overriding that refusal with the destructive choice.
     case "link":
-      return { op: "link", id: positional[0], dependsOn: positional[1], type: flags.type ?? "blocks", actor, at };
+      return { op: "link", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at };
+    case "unlink":
+      return { op: "unlink", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at };
     case "show":
       return { op: "show", id: positional[0] };
     case "list": {
@@ -97,7 +104,7 @@ function buildCommand(): Command {
     }
     default:
       console.error(
-        "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|show|list|search|ready|report|export|import> ...",
+        "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|unlink|show|list|search|ready|report|export|import> ...",
       );
       process.exit(2);
   }
@@ -109,5 +116,19 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const store = new SqliteStore(dbPath);
 const result = store.run(command);
 store.close();
+
+// Echo the edge in words on link/unlink. Direction is the other silent
+// mistake on this verb — `link A B` means A depends on B, and a reversed pair
+// is accepted, valid and wrong — and for unlink it is what turns removed into
+// something an operator reads. Stating the relation at the moment it is
+// written puts the gating in front of the caller rather than leaving it to be
+// discovered later in a ready queue that quietly lost a row.
+if ((command.op === "link" || command.op === "unlink") && result.ok === true) {
+  const rel = command.type === "parent-child" ? "CHILD OF" : "BLOCKED BY";
+  const state =
+    command.op === "link" ? "now" : result.removed === true ? "no longer" : "already not";
+  result.edge = `${String(command.id)} is ${state} ${rel} ${String(command.dependsOn)}`;
+}
+
 console.log(JSON.stringify(result, null, 2));
 process.exit(result.ok === true ? 0 : 1);
