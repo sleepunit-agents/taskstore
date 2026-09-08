@@ -45,7 +45,7 @@ describe("spec/fixture binding", () => {
   const spec = readFileSync(join(dir, "spec.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((l) => JSON.parse(l) as { record: string; id?: string; fixtures?: string[] });
+    .map((l) => JSON.parse(l) as { record: string; id?: string; class?: string; fixtures?: string[] });
   const criteria = spec.filter((r) => r.record === "criterion");
   const cited = new Set(criteria.flatMap((c) => c.fixtures ?? []));
   const held = new Set(fixtures.map((f) => f.id));
@@ -56,5 +56,31 @@ describe("spec/fixture binding", () => {
 
   it("every cited fixture exists in the corpus", () => {
     expect([...cited].filter((id) => !held.has(id))).toEqual([]);
+  });
+
+  // The direction that matters more, and the one the first two miss: a
+  // criterion citing NOTHING is a claim with no evidence at all — worse than
+  // a fixture nobody claims, since the orphan fixture at least still runs.
+  // `c.fixtures ?? []` means such a criterion contributes nothing to `cited`
+  // and trips neither check above.
+  //
+  // The split is exact, not a convention to be kept by hand: a behavioral
+  // criterion asserts a transition and is provable, so it MUST cite; a
+  // judgment criterion (ac-ts-id-shape, ac-ts-loom-boundary) asserts a
+  // refusal no op-sequence can witness, so it must NOT pretend to evidence.
+  // Both directions, because a judgment criterion citing fixtures is the
+  // same lie told the other way round.
+  it("behavioral criteria cite fixtures and judgment criteria do not", () => {
+    const wrong = criteria.filter(
+      (c) => ((c.fixtures ?? []).length > 0) !== (c.class === "behavioral"),
+    );
+    expect(wrong.map((c) => `${c.id} (${c.class})`)).toEqual([]);
+  });
+
+  // Fixture ids collapse into `held` as a Set, so a duplicate id would shadow
+  // a real fixture and vanish from both checks without failing either.
+  it("fixture ids are unique", () => {
+    const ids = fixtures.map((f) => f.id);
+    expect(ids.length).toBe(new Set(ids).size);
   });
 });

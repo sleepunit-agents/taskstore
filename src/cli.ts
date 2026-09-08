@@ -131,4 +131,15 @@ if ((command.op === "link" || command.op === "unlink") && result.ok === true) {
 }
 
 console.log(JSON.stringify(result, null, 2));
-process.exit(result.ok === true ? 0 : 1);
+
+// An unlink that removed nothing exits NON-ZERO even though the command is
+// contract-valid and ok true. The core is right to accept it — that keeps
+// unlink idempotent, so replaying a mirror never fails on an edge already
+// gone — but at the CLI the four ways to get removed false are a reversed
+// pair, the wrong --type, an edge that never existed, and a genuine repeat,
+// and only the last is benign. Exiting 0 would put the miss behind `&&`,
+// `set -e` and every CI step, which is precisely the failure this same
+// change removes from link: a wrong belief about the store, silently
+// blessed. it-ts-links licenses treating it as failure here.
+const missedUnlink = command.op === "unlink" && result.ok === true && result.removed !== true;
+process.exit(result.ok === true && !missedUnlink ? 0 : 1);
