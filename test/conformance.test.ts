@@ -35,3 +35,26 @@ describe("taskstore-core fixture corpus", () => {
     });
   }
 });
+
+// The corpus is run by file, so a fixture bound to no criterion passes green
+// and proves nothing about the contract — it is evidence for a claim nobody
+// made. That is not hypothetical: fx-unclaim and fx-unclaim-bad shipped that
+// way and went unnoticed until 2026-09-08, because every signal the suite
+// produced was a pass. These two tests close the loop in both directions.
+describe("spec/fixture binding", () => {
+  const spec = readFileSync(join(dir, "spec.jsonl"), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as { record: string; id?: string; fixtures?: string[] });
+  const criteria = spec.filter((r) => r.record === "criterion");
+  const cited = new Set(criteria.flatMap((c) => c.fixtures ?? []));
+  const held = new Set(fixtures.map((f) => f.id));
+
+  it("every fixture is cited by some criterion", () => {
+    expect([...held].filter((id) => !cited.has(id))).toEqual([]);
+  });
+
+  it("every cited fixture exists in the corpus", () => {
+    expect([...cited].filter((id) => !held.has(id))).toEqual([]);
+  });
+});
