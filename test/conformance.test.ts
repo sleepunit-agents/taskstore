@@ -45,9 +45,14 @@ describe("spec/fixture binding", () => {
   const spec = readFileSync(join(dir, "spec.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((l) => JSON.parse(l) as { record: string; id?: string; class?: string; fixtures?: string[] });
+    .map((l) => JSON.parse(l) as { record: string; id?: string; class?: string; state?: string; fixtures?: string[] });
   const criteria = spec.filter((r) => r.record === "criterion");
-  const cited = new Set(criteria.flatMap((c) => c.fixtures ?? []));
+  // Only ACTIVE criteria count as citing: a fixture whose sole citation sits
+  // on a deprecated or superseded criterion is evidence for a claim the spec
+  // has withdrawn, which is the orphan case wearing a citation.
+  const cited = new Set(
+    criteria.filter((c) => c.state === "active").flatMap((c) => c.fixtures ?? []),
+  );
   const held = new Set(fixtures.map((f) => f.id));
 
   it("every fixture is cited by some criterion", () => {
@@ -70,11 +75,28 @@ describe("spec/fixture binding", () => {
   // refusal no op-sequence can witness, so it must NOT pretend to evidence.
   // Both directions, because a judgment criterion citing fixtures is the
   // same lie told the other way round.
+  // Keyed on the exact string "behavioral", so the vocabulary has to be
+  // pinned first: a criterion whose class is misspelled ("behavioural"),
+  // missing, or null AND citing nothing evaluates false !== false and sails
+  // through as green — a claim with no evidence at all, arriving by typo.
+  it("every criterion declares a known class", () => {
+    const known = ["behavioral", "judgment"];
+    expect(criteria.filter((c) => !known.includes(c.class as string)).map((c) => `${c.id} (${c.class})`))
+      .toEqual([]);
+  });
+
   it("behavioral criteria cite fixtures and judgment criteria do not", () => {
     const wrong = criteria.filter(
       (c) => ((c.fixtures ?? []).length > 0) !== (c.class === "behavioral"),
     );
     expect(wrong.map((c) => `${c.id} (${c.class})`)).toEqual([]);
+  });
+
+  // Criterion ids collapse the same way fixture ids do, and a shadowed
+  // criterion fails nothing on its own.
+  it("criterion ids are unique", () => {
+    const ids = criteria.map((c) => c.id);
+    expect(ids.length).toBe(new Set(ids).size);
   });
 
   // Fixture ids collapse into `held` as a Set, so a duplicate id would shadow

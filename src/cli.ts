@@ -12,6 +12,7 @@
 //   taskstore comment <id> "text"
 //   taskstore link <id> <dependsOn> --type blocks|parent-child
 //   taskstore unlink <id> <dependsOn> --type blocks|parent-child
+//     exit 0 removed, 3 valid but no such edge, 1 rejected, 2 usage
 //   taskstore show <id> | list [--status s] | search <query> [--status s] | report | export
 //   taskstore import <payload.json>
 //
@@ -125,9 +126,19 @@ store.close();
 // discovered later in a ready queue that quietly lost a row.
 if ((command.op === "link" || command.op === "unlink") && result.ok === true) {
   const rel = command.type === "parent-child" ? "CHILD OF" : "BLOCKED BY";
-  const state =
-    command.op === "link" ? "now" : result.removed === true ? "no longer" : "already not";
-  result.edge = `${String(command.id)} is ${state} ${rel} ${String(command.dependsOn)}`;
+  const a = String(command.id);
+  const b = String(command.dependsOn);
+  // A miss must not read as reassurance. The same removed:false covers a
+  // reversed pair, the wrong --type, an edge that never existed and a plain
+  // repeat, and only the last is benign — so the line names what did NOT
+  // happen and points at the two ways to have got here wrong, rather than
+  // stating a fact about the store that sounds like the requested outcome.
+  result.edge =
+    command.op === "link"
+      ? `${a} is now ${rel} ${b}`
+      : result.removed === true
+        ? `${a} is no longer ${rel} ${b}`
+        : `NOTHING REMOVED: no ${String(command.type)} edge from ${a} to ${b} (check the direction and --type)`;
 }
 
 console.log(JSON.stringify(result, null, 2));
@@ -141,5 +152,10 @@ console.log(JSON.stringify(result, null, 2));
 // `set -e` and every CI step, which is precisely the failure this same
 // change removes from link: a wrong belief about the store, silently
 // blessed. it-ts-links licenses treating it as failure here.
+// Exit codes are distinct on purpose. Collapsing the miss into 1 would tell a
+// caller only "not ok", conflating an INVALID command with a valid one that
+// found nothing to do — and the JSON says ok true while the process says
+// failure, so the status has to carry the difference. 0 removed it, 3 the
+// command was fine but no edge matched, 1 the command was rejected, 2 usage.
 const missedUnlink = command.op === "unlink" && result.ok === true && result.removed !== true;
-process.exit(result.ok === true && !missedUnlink ? 0 : 1);
+process.exit(result.ok !== true ? 1 : missedUnlink ? 3 : 0);
