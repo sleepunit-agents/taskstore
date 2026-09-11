@@ -189,3 +189,121 @@ describe("exit codes", () => {
     expect(JSON.parse(readFileSync(out, "utf8")).removed).toBe(true);
   });
 });
+
+// The t-574 fix: --type is now required by the binding. Before 0.3.0 the CLI
+// silently defaulted to "blocks", overriding the core's E_MISSING_FIELD refusal
+// with the edge that gates the ready queue. A missing flag must flow through as
+// absent — undefined — so the core sees the absent field and rejects it.
+// These tests guard the fix: a ?? "blocks" added back to cli.ts would make
+// the first test here pass and the exit-code test above continue to pass too,
+// but these would flip because the command would succeed instead of failing.
+describe("--type requirement on link / unlink", () => {
+  it("link without --type is rejected (exit 1, E_MISSING_FIELD)", async () => {
+    const out = join(dir, "link-notype.json");
+    expect((await sh(`${cli} link t-5 t-6 > '${out}'`)).code).toBe(1);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("E_MISSING_FIELD");
+  });
+
+  it("unlink without --type is rejected (exit 1, E_MISSING_FIELD)", async () => {
+    // Establish a known edge first so the missing-type rejection cannot be
+    // confused with an unknown-edge miss (exit 3).
+    await sh(`${cli} link t-7 t-8 --type blocks > /dev/null`);
+    const out = join(dir, "unlink-notype.json");
+    expect((await sh(`${cli} unlink t-7 t-8 > '${out}'`)).code).toBe(1);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("E_MISSING_FIELD");
+  });
+
+  it("link with --type blocks succeeds and echoes the edge", async () => {
+    const out = join(dir, "link-typed.json");
+    expect((await sh(`${cli} link t-9 t-10 --type blocks > '${out}'`)).code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.ok).toBe(true);
+    // Edge echo confirms the command took effect.
+    expect(result.edge).toMatch(/BLOCKED BY/);
+  });
+});
+
+// Edge echo direction: the echo exists to surface the reversed-pair mistake at
+// the moment it is made. `link A B` means A depends on B (A is blocked by B),
+// and the echo must name it that way — not "A blocks B", which is the natural
+// language a confused caller writes. Both link types and the unlink branch are
+// exercised here.
+describe("edge echo wording and direction", () => {
+  it("link --type blocks echoes 'A is now BLOCKED BY B'", async () => {
+    const out = join(dir, "echo-blocks.json");
+    await sh(`${cli} link t-11 t-12 --type blocks > '${out}'`);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.edge).toBe("t-11 is now BLOCKED BY t-12");
+  });
+
+  it("link --type parent-child echoes 'A is now CHILD OF B'", async () => {
+    const out = join(dir, "echo-pc.json");
+    await sh(`${cli} link t-13 t-14 --type parent-child > '${out}'`);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.edge).toBe("t-13 is now CHILD OF t-14");
+  });
+
+  it("unlink that removes a blocks edge echoes 'is no longer BLOCKED BY'", async () => {
+    await sh(`${cli} link t-15 t-16 --type blocks > /dev/null`);
+    const out = join(dir, "echo-unlink-blocks.json");
+    await sh(`${cli} unlink t-15 t-16 --type blocks > '${out}'`);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.edge).toBe("t-15 is no longer BLOCKED BY t-16");
+  });
+
+  it("unlink that removes a parent-child edge echoes 'is no longer CHILD OF'", async () => {
+    await sh(`${cli} link t-17 t-18 --type parent-child > /dev/null`);
+    const out = join(dir, "echo-unlink-pc.json");
+    await sh(`${cli} unlink t-17 t-18 --type parent-child > '${out}'`);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.edge).toBe("t-17 is no longer CHILD OF t-18");
+  });
+
+  it("missed unlink names the type and direction in the NOTHING REMOVED line", async () => {
+    // No edge from t-19 to t-20 has been created, so this is a miss.
+    const out = join(dir, "echo-miss.json");
+    await sh(`${cli} unlink t-19 t-20 --type blocks > '${out}'`);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.edge).toContain("NOTHING REMOVED");
+    expect(result.edge).toContain("blocks");
+    expect(result.edge).toContain("t-19");
+    expect(result.edge).toContain("t-20");
+  });
+});
+
+// TASKSTORE_ACTOR is the binding's actor injection point. The CLI defaults to
+// "art" when the var is absent; when set, it stamps the actor on every
+// command that records one. The core stores it as createdBy on tasks.
+describe("TASKSTORE_ACTOR attribution", () => {
+  it("defaults to 'art' when TASKSTORE_ACTOR is unset", async () => {
+    const createOut = join(dir, "actor-default-create.json");
+    // Unset TASKSTORE_ACTOR explicitly so the test is independent of the
+    // ambient environment (a CI runner might set it).
+    await sh(`env -u TASKSTORE_ACTOR ${cli} create "actor default test" > '${createOut}'`);
+    const created = JSON.parse(readFileSync(createOut, "utf8"));
+    expect(created.ok).toBe(true);
+    const id = created.id as string;
+
+    const showOut = join(dir, "actor-default-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.createdBy).toBe("art");
+  });
+
+  it("uses TASKSTORE_ACTOR when set", async () => {
+    const createOut = join(dir, "actor-custom-create.json");
+    await sh(`TASKSTORE_ACTOR=testbot ${cli} create "actor custom test" > '${createOut}'`);
+    const created = JSON.parse(readFileSync(createOut, "utf8"));
+    expect(created.ok).toBe(true);
+    const id = created.id as string;
+
+    const showOut = join(dir, "actor-custom-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.createdBy).toBe("testbot");
+  });
+});
