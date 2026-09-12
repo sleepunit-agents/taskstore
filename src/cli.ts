@@ -160,7 +160,9 @@ if ((command.op === "link" || command.op === "unlink") && result.ok === true) {
   // stating a fact about the store that sounds like the requested outcome.
   result.edge =
     command.op === "link"
-      ? `${a} is now ${rel} ${b}`
+      ? result.linked === true
+        ? `${a} is now ${rel} ${b}`
+        : `ALREADY LINKED: ${String(command.type)} edge from ${a} to ${b} already exists`
       : result.removed === true
         ? `${a} is no longer ${rel} ${b}`
         : `NOTHING REMOVED: no ${String(command.type)} edge from ${a} to ${b} (check the direction and --type)`;
@@ -174,15 +176,18 @@ console.log(JSON.stringify(result, null, 2));
 // gone — but at the CLI the four ways to get removed false are a reversed
 // pair, the wrong --type, an edge that never existed, and a genuine repeat,
 // and only the last is benign. Exiting 0 would put the miss behind `&&`,
-// `set -e` and every CI step, which is precisely the failure this same
-// change removes from link: a wrong belief about the store, silently
-// blessed. it-ts-links licenses treating it as failure here.
+// `set -e` and every CI step. The symmetric case on link: a duplicate link
+// exits 3 to match — the edge already existed and nothing changed; a caller
+// who expected to write a new constraint should know. it-ts-links licenses
+// treating both as failure here.
 // Exit codes are distinct on purpose. Collapsing the miss into 1 would tell a
 // caller only "not ok", conflating an INVALID command with a valid one that
 // found nothing to do — and the JSON says ok true while the process says
-// failure, so the status has to carry the difference. 0 removed it, 3 the
-// command was fine but no edge matched, 1 the command was rejected, 2 usage.
+// failure, so the status has to carry the difference. 0 did the work, 3 the
+// command was fine but the edge was already in the expected state (no-op),
+// 1 the command was rejected, 2 usage.
 const missedUnlink = command.op === "unlink" && result.ok === true && result.removed !== true;
+const dupLink = command.op === "link" && result.ok === true && result.linked !== true;
 // SET the status; do not process.exit() on it. stdout to a pipe is written
 // through a non-blocking fd: a write larger than the 64 KiB buffer is queued
 // and drained on later ticks, and process.exit() ends the process without
@@ -194,4 +199,4 @@ const missedUnlink = command.op === "unlink" && result.ok === true && result.rem
 // Nothing holds the loop open here: the store is closed above and
 // better-sqlite3 is synchronous, so the process still ends as soon as stdout
 // is flushed — with the whole output and the same four statuses.
-process.exitCode = result.ok !== true ? 1 : missedUnlink ? 3 : 0;
+process.exitCode = result.ok !== true ? 1 : missedUnlink || dupLink ? 3 : 0;
