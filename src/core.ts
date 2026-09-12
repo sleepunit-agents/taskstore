@@ -408,7 +408,7 @@ function doLink(state: StoreState, c: Command): Result {
     );
     if (dup) {
       if (errs.any) return { errors: errs.list(), ok: false };
-      return { errors: [], ok: true }; // accepted no-op, precedes all semantic checks
+      return { errors: [], ok: true, linked: false }; // accepted no-op, precedes all semantic checks
     }
     if (
       type === "parent-child" &&
@@ -419,7 +419,7 @@ function doLink(state: StoreState, c: Command): Result {
   }
   if (errs.any) return { errors: errs.list(), ok: false };
   state.links.push({ id: from!.id, dependsOn: to!.id, type: type! });
-  return { errors: [], ok: true };
+  return { errors: [], ok: true, linked: true };
 }
 
 // link's inverse. Validation is link's, verbatim — the same required fields,
