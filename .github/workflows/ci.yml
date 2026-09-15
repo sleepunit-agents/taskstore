@@ -16,7 +16,7 @@ jobs:
         with:
           path: taskstore
 
-      - name: Checkout felag (file: sibling dep)
+      - name: "Checkout felag (file: sibling dep)"
         uses: actions/checkout@v4
         with:
           repository: sleepunit-agents/felag
