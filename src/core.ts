@@ -342,7 +342,10 @@ function doLifecycle(state: StoreState, c: Command, kind: "claim" | "unclaim" | 
   } else if (kind === "close") {
     t.status = "closed";
     t.closedAt = c.at as string;
+    // A close without a reason clears any stray closeReason (an imported open
+    // record may carry one), so report never reads a reason this close did not give.
     if (c.reason !== undefined) t.closeReason = c.reason as string;
+    else delete t.closeReason;
   } else {
     t.status = "open";
     delete t.startedAt;
@@ -621,7 +624,9 @@ function doImport(state: StoreState, c: Command): Result {
       if (payloadIds.has(r.id) || findTask(state, r.id) !== undefined) errs.add("E_DUP_ID");
       payloadIds.add(r.id);
     }
-    if (isString(r.specItemRef)) {
+    // Linkage collision is a lookup: well-posed only when both key fields are
+    // well-typed (a mistyped criterionId reports E_BAD_FIELD alone).
+    if (isString(r.specItemRef) && (r.criterionId === undefined || isString(r.criterionId))) {
       const key = linkageKey(r.specItemRef, isString(r.criterionId) ? r.criterionId : undefined);
       if (payloadKeys.has(key) || heldKeys.has(key)) errs.add("E_DUP_LINKAGE");
       payloadKeys.add(key);
