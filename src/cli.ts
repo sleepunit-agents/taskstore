@@ -178,8 +178,8 @@ console.log(JSON.stringify(result, null, 2));
 // and only the last is benign. Exiting 0 would put the miss behind `&&`,
 // `set -e` and every CI step. The symmetric case on link: a duplicate link
 // exits 3 to match — the edge already existed and nothing changed; a caller
-// who expected to write a new constraint should know. it-ts-links licenses
-// treating both as failure here.
+// who expected to write a new constraint should know. it-ts-links leaves the
+// exit status of both no-ops to the binding; this binding treats both as failure.
 // Exit codes are distinct on purpose. Collapsing the miss into 1 would tell a
 // caller only "not ok", conflating an INVALID command with a valid one that
 // found nothing to do — and the JSON says ok true while the process says

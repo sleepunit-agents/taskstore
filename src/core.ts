@@ -66,8 +66,17 @@ const RFC3339 =
 function parseable(s: string): boolean {
   const m = RFC3339.exec(s);
   if (!m) return false;
-  if (m[3] === "60") return false;
-  return !Number.isNaN(Date.parse(s.toUpperCase()));
+  // RFC 3339's ABNF bounds every field (time-hour 00-23, date-mday by month
+  // and leap year, time-numoffset hours 00-23). Date.parse is not a check:
+  // V8 accepts T24:00:00 and 2026-02-30 (cold review t-720, measured).
+  const [y, mo, d] = s.slice(0, 10).split("-").map(Number);
+  const [h, mi, se] = [m[1], m[2], m[3]].map(Number);
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const mdays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (mo < 1 || mo > 12 || d < 1 || d > mdays[mo - 1]) return false;
+  if (h > 23 || mi > 59 || se > 59) return false;
+  if (m[5].length === 6 && (Number(m[5].slice(1, 3)) > 23 || Number(m[5].slice(4, 6)) > 59)) return false;
+  return true;
 }
 
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -121,8 +130,24 @@ function clone<T>(v: T): T {
   return structuredClone(v);
 }
 
+// Collision-free: absent criterionId (null) is distinct from "" and no
+// separator character can make two different pairs spell the same key.
 const linkageKey = (specItemRef: string, criterionId: string | undefined): string =>
-  `${specItemRef} ${criterionId ?? ""}`;
+  JSON.stringify([specItemRef, criterionId ?? null]);
+
+// Ascending Unicode code-point order (it-ts-query's report sort). JavaScript's
+// `<` compares UTF-16 code units, which disagrees above U+FFFF.
+function cmpCodePoints(a: string, b: string): number {
+  const ai = a[Symbol.iterator]();
+  const bi = b[Symbol.iterator]();
+  for (;;) {
+    const x = ai.next();
+    const y = bi.next();
+    if (x.done || y.done) return x.done === y.done ? 0 : x.done ? -1 : 1;
+    const d = x.value.codePointAt(0)! - y.value.codePointAt(0)!;
+    if (d !== 0) return d;
+  }
+}
 
 function findTask(state: StoreState, id: string): Task | undefined {
   return state.tasks.find((t) => t.id === id);
@@ -407,7 +432,7 @@ function doLink(state: StoreState, c: Command): Result {
       (l) => l.id === from.id && l.dependsOn === to.id && l.type === type,
     );
     if (dup) {
-      if (errs.any) return { errors: errs.list(), ok: false };
+      if (errs.any) return { errors: errs.list(), linked: false, ok: false };
       return { errors: [], ok: true, linked: false }; // accepted no-op, precedes all semantic checks
     }
     if (
@@ -417,7 +442,7 @@ function doLink(state: StoreState, c: Command): Result {
       errs.add("E_HAS_PARENT");
     if (wouldCycle(state.links, from.id, to.id, type)) errs.add("E_CYCLE");
   }
-  if (errs.any) return { errors: errs.list(), ok: false };
+  if (errs.any) return { errors: errs.list(), linked: false, ok: false };
   state.links.push({ id: from!.id, dependsOn: to!.id, type: type! });
   return { errors: [], ok: true, linked: true };
 }
@@ -477,9 +502,11 @@ function doList(state: StoreState, c: Command): Result {
 }
 
 function doSearch(state: StoreState, c: Command): Result {
-  if (!isString(c.q)) return { entries: [], errors: ["E_MISSING_FIELD"], ok: false };
+  const errs = new Errs();
+  if (!isString(c.q)) errs.add("E_MISSING_FIELD");
   if (c.status !== undefined && !(isString(c.status) && STATUSES.includes(c.status)))
-    return { entries: [], errors: ["E_BAD_FIELD"], ok: false };
+    errs.add("E_BAD_FIELD");
+  if (errs.any || !isString(c.q)) return { entries: [], errors: errs.list(), ok: false };
   // Case-insensitive substring match over the text-bearing fields (the retrieval
   // `list` lacks — it filters only by status). Same listEntry shape as list/ready.
   const q = c.q.toLowerCase();
@@ -515,11 +542,13 @@ function doReport(state: StoreState): Result {
       taskRef: t.id,
     }))
     .sort((a, b) => {
-      if (a.specItemRef !== b.specItemRef) return a.specItemRef < b.specItemRef ? -1 : 1;
-      const ac = a.criterionId ?? "";
-      const bc = b.criterionId ?? "";
-      if (ac !== bc) return ac < bc ? -1 : 1; // absent sorts first
-      return a.taskRef < b.taskRef ? -1 : 1;
+      if (a.specItemRef !== b.specItemRef) return cmpCodePoints(a.specItemRef, b.specItemRef);
+      if (a.criterionId !== b.criterionId) {
+        if (a.criterionId === undefined) return -1; // absent sorts before any present value, "" included
+        if (b.criterionId === undefined) return 1;
+        return cmpCodePoints(a.criterionId, b.criterionId);
+      }
+      return cmpCodePoints(a.taskRef, b.taskRef);
     });
   return { entries, errors: [], ok: true };
 }
@@ -537,10 +566,8 @@ function doImport(state: StoreState, c: Command): Result {
   const errs = new Errs();
   reqString(errs, c.actor);
   reqAt(errs, c.at);
-  if (!Array.isArray(c.tasks)) {
-    errs.add("E_MISSING_FIELD");
-    return { errors: errs.list(), imported: 0, ok: false };
-  }
+  // All-applicable: a non-array tasks does not stop the envelope and links checks.
+  if (!Array.isArray(c.tasks)) errs.add("E_MISSING_FIELD");
   if (c.links !== undefined && !Array.isArray(c.links)) errs.add("E_BAD_FIELD");
   const payloadLinks = Array.isArray(c.links) ? c.links : [];
 
@@ -552,7 +579,7 @@ function doImport(state: StoreState, c: Command): Result {
       .map((t) => linkageKey(t.specItemRef!, t.criterionId)),
   );
 
-  for (const raw of c.tasks) {
+  for (const raw of Array.isArray(c.tasks) ? c.tasks : []) {
     if (!isPlainObject(raw)) {
       errs.add("E_MISSING_FIELD");
       continue;
@@ -643,7 +670,9 @@ function doImport(state: StoreState, c: Command): Result {
       priority: raw.priority as number,
       createdAt: raw.createdAt as string,
       createdBy: raw.createdBy as string,
-      comments: (raw.comments as Comment[] | undefined)?.map((cm) => ({ ...cm })) ?? [],
+      // Unknown keys are dropped, on comments as on task records (it-ts-portability).
+      comments:
+        (raw.comments as Comment[] | undefined)?.map((cm) => ({ actor: cm.actor, at: cm.at, text: cm.text })) ?? [],
     };
     for (const f of [
       "description", "assignee", "startedAt", "closedAt", "closeReason",
