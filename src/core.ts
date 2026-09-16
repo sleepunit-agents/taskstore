@@ -454,9 +454,9 @@ function doLink(state: StoreState, c: Command): Result {
 // second parent.
 //
 // An unlink naming no held edge is ACCEPTED and changes nothing, mirroring
-// link's treatment of a duplicate. The two are then total inverses and both
-// are idempotent, which is what a store whose exit door is a replayable
-// mirror needs. The no-op is not silent, though: removed distinguishes the
+// link's treatment of a duplicate. Both are idempotent, which is what a store
+// whose exit door is a replayable mirror needs; the inverse is exact over held
+// referents and deliberately not total (it-ts-links). The no-op is not silent, though: removed distinguishes the
 // removal from the miss exactly as created distinguishes a fresh task from
 // an idempotent hit. A caller who reversed the direction sees removed false
 // rather than a success it can mistake for a repair.
@@ -649,13 +649,15 @@ function doImport(state: StoreState, c: Command): Result {
         (p) => p.id === l.id && p.dependsOn === l.dependsOn && p.type === type,
       );
       if (dup) continue; // accepted no-op
-      if (
+      // Entries apply in payload order; only an entry that validates clean
+      // joins the graph later entries are checked against (it-ts-portability).
+      const reparent =
         type === "parent-child" &&
-        prospective.some((p) => p.type === "parent-child" && p.id === l.id)
-      )
-        errs.add("E_HAS_PARENT");
-      if (wouldCycle(prospective, l.id, l.dependsOn, type)) errs.add("E_CYCLE");
-      prospective.push({ id: l.id, dependsOn: l.dependsOn, type });
+        prospective.some((p) => p.type === "parent-child" && p.id === l.id);
+      const cycle = wouldCycle(prospective, l.id, l.dependsOn, type);
+      if (reparent) errs.add("E_HAS_PARENT");
+      if (cycle) errs.add("E_CYCLE");
+      if (!reparent && !cycle) prospective.push({ id: l.id, dependsOn: l.dependsOn, type });
     }
   }
 
@@ -680,6 +682,11 @@ function doImport(state: StoreState, c: Command): Result {
     ] as const)
       if (raw[f] !== undefined) (task as unknown as Record<string, unknown>)[f] = raw[f];
     state.tasks.push(task);
+    // A generated id is never reused (it-ts-model): an imported id in the
+    // generator's own t-<n> form moves the sequence past it, so deleting that
+    // task can never hand its id to a later create.
+    const m = /^t-(\d+)$/.exec(task.id);
+    if (m && Number(m[1]) > state.seq) state.seq = Number(m[1]);
   }
   state.links = prospective;
   return { errors: [], imported: (c.tasks as unknown[]).length, ok: true };

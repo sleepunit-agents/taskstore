@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runOps } from "../src/run-ops.js";
+import { apply, emptyState } from "../src/core.js";
 import type { Command } from "../src/core.js";
 
 interface Fixture {
@@ -104,5 +105,31 @@ describe("spec/fixture binding", () => {
   it("fixture ids are unique", () => {
     const ids = fixtures.map((f) => f.id);
     expect(ids.length).toBe(new Set(ids).size);
+  });
+});
+
+// Binding-specific, so not a fixture: the generator's own id form is
+// implementation surface (ac-ts-id-shape). An imported id in that form must
+// still never come back out of create after delete (it-ts-model) — measured
+// broken before the t-720 cold review: freshId skipped only HELD ids.
+describe("generated ids vs imported ids in the generator's form", () => {
+  it("a deleted imported t-<n> is never generated again", () => {
+    const rec = (id: string) => ({
+      id, title: id, type: "task", priority: 2, status: "open",
+      createdAt: "2026-09-16T19:00:00Z", createdBy: "art",
+    });
+    const at = "2026-09-16T19:00:00Z";
+    let state = emptyState();
+    const step = (c: Command) => {
+      const r = apply(state, c);
+      state = r.state;
+      return r.result;
+    };
+    step({ op: "import", tasks: [rec("t-1"), rec("t-7")], actor: "art", at });
+    step({ op: "delete", id: "t-1", actor: "art", at });
+    step({ op: "delete", id: "t-7", actor: "art", at });
+    const made = step({ op: "create", title: "fresh", actor: "art", at });
+    expect(made.ok).toBe(true);
+    expect(["t-1", "t-7"]).not.toContain(made.id);
   });
 });
