@@ -66,8 +66,17 @@ const RFC3339 =
 function parseable(s: string): boolean {
   const m = RFC3339.exec(s);
   if (!m) return false;
-  if (m[3] === "60") return false;
-  return !Number.isNaN(Date.parse(s.toUpperCase()));
+  // RFC 3339's ABNF bounds every field (time-hour 00-23, date-mday by month
+  // and leap year, time-numoffset hours 00-23). Date.parse is not a check:
+  // V8 accepts T24:00:00 and 2026-02-30 (cold review t-720, measured).
+  const [y, mo, d] = s.slice(0, 10).split("-").map(Number);
+  const [h, mi, se] = [m[1], m[2], m[3]].map(Number);
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const mdays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (mo < 1 || mo > 12 || d < 1 || d > mdays[mo - 1]) return false;
+  if (h > 23 || mi > 59 || se > 59) return false;
+  if (m[5].length === 6 && (Number(m[5].slice(1, 3)) > 23 || Number(m[5].slice(4, 6)) > 59)) return false;
+  return true;
 }
 
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -121,8 +130,24 @@ function clone<T>(v: T): T {
   return structuredClone(v);
 }
 
+// Collision-free: absent criterionId (null) is distinct from "" and no
+// separator character can make two different pairs spell the same key.
 const linkageKey = (specItemRef: string, criterionId: string | undefined): string =>
-  `${specItemRef} ${criterionId ?? ""}`;
+  JSON.stringify([specItemRef, criterionId ?? null]);
+
+// Ascending Unicode code-point order (it-ts-query's report sort). JavaScript's
+// `<` compares UTF-16 code units, which disagrees above U+FFFF.
+function cmpCodePoints(a: string, b: string): number {
+  const ai = a[Symbol.iterator]();
+  const bi = b[Symbol.iterator]();
+  for (;;) {
+    const x = ai.next();
+    const y = bi.next();
+    if (x.done || y.done) return x.done === y.done ? 0 : x.done ? -1 : 1;
+    const d = x.value.codePointAt(0)! - y.value.codePointAt(0)!;
+    if (d !== 0) return d;
+  }
+}
 
 function findTask(state: StoreState, id: string): Task | undefined {
   return state.tasks.find((t) => t.id === id);
@@ -317,7 +342,10 @@ function doLifecycle(state: StoreState, c: Command, kind: "claim" | "unclaim" | 
   } else if (kind === "close") {
     t.status = "closed";
     t.closedAt = c.at as string;
+    // A close without a reason clears any stray closeReason (an imported open
+    // record may carry one), so report never reads a reason this close did not give.
     if (c.reason !== undefined) t.closeReason = c.reason as string;
+    else delete t.closeReason;
   } else {
     t.status = "open";
     delete t.startedAt;
@@ -407,8 +435,8 @@ function doLink(state: StoreState, c: Command): Result {
       (l) => l.id === from.id && l.dependsOn === to.id && l.type === type,
     );
     if (dup) {
-      if (errs.any) return { errors: errs.list(), ok: false };
-      return { errors: [], ok: true }; // accepted no-op, precedes all semantic checks
+      if (errs.any) return { errors: errs.list(), linked: false, ok: false };
+      return { errors: [], ok: true, linked: false }; // accepted no-op, precedes all semantic checks
     }
     if (
       type === "parent-child" &&
@@ -417,9 +445,9 @@ function doLink(state: StoreState, c: Command): Result {
       errs.add("E_HAS_PARENT");
     if (wouldCycle(state.links, from.id, to.id, type)) errs.add("E_CYCLE");
   }
-  if (errs.any) return { errors: errs.list(), ok: false };
+  if (errs.any) return { errors: errs.list(), linked: false, ok: false };
   state.links.push({ id: from!.id, dependsOn: to!.id, type: type! });
-  return { errors: [], ok: true };
+  return { errors: [], ok: true, linked: true };
 }
 
 // link's inverse. Validation is link's, verbatim — the same required fields,
@@ -429,9 +457,9 @@ function doLink(state: StoreState, c: Command): Result {
 // second parent.
 //
 // An unlink naming no held edge is ACCEPTED and changes nothing, mirroring
-// link's treatment of a duplicate. The two are then total inverses and both
-// are idempotent, which is what a store whose exit door is a replayable
-// mirror needs. The no-op is not silent, though: removed distinguishes the
+// link's treatment of a duplicate. Both are idempotent, which is what a store
+// whose exit door is a replayable mirror needs; the inverse is exact over held
+// referents and deliberately not total (it-ts-links). The no-op is not silent, though: removed distinguishes the
 // removal from the miss exactly as created distinguishes a fresh task from
 // an idempotent hit. A caller who reversed the direction sees removed false
 // rather than a success it can mistake for a repair.
@@ -477,9 +505,11 @@ function doList(state: StoreState, c: Command): Result {
 }
 
 function doSearch(state: StoreState, c: Command): Result {
-  if (!isString(c.q)) return { entries: [], errors: ["E_MISSING_FIELD"], ok: false };
+  const errs = new Errs();
+  if (!isString(c.q)) errs.add("E_MISSING_FIELD");
   if (c.status !== undefined && !(isString(c.status) && STATUSES.includes(c.status)))
-    return { entries: [], errors: ["E_BAD_FIELD"], ok: false };
+    errs.add("E_BAD_FIELD");
+  if (errs.any || !isString(c.q)) return { entries: [], errors: errs.list(), ok: false };
   // Case-insensitive substring match over the text-bearing fields (the retrieval
   // `list` lacks — it filters only by status). Same listEntry shape as list/ready.
   const q = c.q.toLowerCase();
@@ -515,11 +545,13 @@ function doReport(state: StoreState): Result {
       taskRef: t.id,
     }))
     .sort((a, b) => {
-      if (a.specItemRef !== b.specItemRef) return a.specItemRef < b.specItemRef ? -1 : 1;
-      const ac = a.criterionId ?? "";
-      const bc = b.criterionId ?? "";
-      if (ac !== bc) return ac < bc ? -1 : 1; // absent sorts first
-      return a.taskRef < b.taskRef ? -1 : 1;
+      if (a.specItemRef !== b.specItemRef) return cmpCodePoints(a.specItemRef, b.specItemRef);
+      if (a.criterionId !== b.criterionId) {
+        if (a.criterionId === undefined) return -1; // absent sorts before any present value, "" included
+        if (b.criterionId === undefined) return 1;
+        return cmpCodePoints(a.criterionId, b.criterionId);
+      }
+      return cmpCodePoints(a.taskRef, b.taskRef);
     });
   return { entries, errors: [], ok: true };
 }
@@ -537,10 +569,8 @@ function doImport(state: StoreState, c: Command): Result {
   const errs = new Errs();
   reqString(errs, c.actor);
   reqAt(errs, c.at);
-  if (!Array.isArray(c.tasks)) {
-    errs.add("E_MISSING_FIELD");
-    return { errors: errs.list(), imported: 0, ok: false };
-  }
+  // All-applicable: a non-array tasks does not stop the envelope and links checks.
+  if (!Array.isArray(c.tasks)) errs.add("E_MISSING_FIELD");
   if (c.links !== undefined && !Array.isArray(c.links)) errs.add("E_BAD_FIELD");
   const payloadLinks = Array.isArray(c.links) ? c.links : [];
 
@@ -552,7 +582,7 @@ function doImport(state: StoreState, c: Command): Result {
       .map((t) => linkageKey(t.specItemRef!, t.criterionId)),
   );
 
-  for (const raw of c.tasks) {
+  for (const raw of Array.isArray(c.tasks) ? c.tasks : []) {
     if (!isPlainObject(raw)) {
       errs.add("E_MISSING_FIELD");
       continue;
@@ -594,7 +624,9 @@ function doImport(state: StoreState, c: Command): Result {
       if (payloadIds.has(r.id) || findTask(state, r.id) !== undefined) errs.add("E_DUP_ID");
       payloadIds.add(r.id);
     }
-    if (isString(r.specItemRef)) {
+    // Linkage collision is a lookup: well-posed only when both key fields are
+    // well-typed (a mistyped criterionId reports E_BAD_FIELD alone).
+    if (isString(r.specItemRef) && (r.criterionId === undefined || isString(r.criterionId))) {
       const key = linkageKey(r.specItemRef, isString(r.criterionId) ? r.criterionId : undefined);
       if (payloadKeys.has(key) || heldKeys.has(key)) errs.add("E_DUP_LINKAGE");
       payloadKeys.add(key);
@@ -622,13 +654,15 @@ function doImport(state: StoreState, c: Command): Result {
         (p) => p.id === l.id && p.dependsOn === l.dependsOn && p.type === type,
       );
       if (dup) continue; // accepted no-op
-      if (
+      // Entries apply in payload order; only an entry that validates clean
+      // joins the graph later entries are checked against (it-ts-portability).
+      const reparent =
         type === "parent-child" &&
-        prospective.some((p) => p.type === "parent-child" && p.id === l.id)
-      )
-        errs.add("E_HAS_PARENT");
-      if (wouldCycle(prospective, l.id, l.dependsOn, type)) errs.add("E_CYCLE");
-      prospective.push({ id: l.id, dependsOn: l.dependsOn, type });
+        prospective.some((p) => p.type === "parent-child" && p.id === l.id);
+      const cycle = wouldCycle(prospective, l.id, l.dependsOn, type);
+      if (reparent) errs.add("E_HAS_PARENT");
+      if (cycle) errs.add("E_CYCLE");
+      if (!reparent && !cycle) prospective.push({ id: l.id, dependsOn: l.dependsOn, type });
     }
   }
 
@@ -643,7 +677,9 @@ function doImport(state: StoreState, c: Command): Result {
       priority: raw.priority as number,
       createdAt: raw.createdAt as string,
       createdBy: raw.createdBy as string,
-      comments: (raw.comments as Comment[] | undefined)?.map((cm) => ({ ...cm })) ?? [],
+      // Unknown keys are dropped, on comments as on task records (it-ts-portability).
+      comments:
+        (raw.comments as Comment[] | undefined)?.map((cm) => ({ actor: cm.actor, at: cm.at, text: cm.text })) ?? [],
     };
     for (const f of [
       "description", "assignee", "startedAt", "closedAt", "closeReason",
@@ -651,6 +687,11 @@ function doImport(state: StoreState, c: Command): Result {
     ] as const)
       if (raw[f] !== undefined) (task as unknown as Record<string, unknown>)[f] = raw[f];
     state.tasks.push(task);
+    // A generated id is never reused (it-ts-model): an imported id in the
+    // generator's own t-<n> form moves the sequence past it, so deleting that
+    // task can never hand its id to a later create.
+    const m = /^t-(\d+)$/.exec(task.id);
+    if (m && Number(m[1]) > state.seq) state.seq = Number(m[1]);
   }
   state.links = prospective;
   return { errors: [], imported: (c.tasks as unknown[]).length, ok: true };

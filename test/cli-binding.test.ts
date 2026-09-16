@@ -188,6 +188,17 @@ describe("exit codes", () => {
     expect((await sh(`${cli} unlink t-3 t-4 --type blocks > '${out}'`)).code).toBe(0);
     expect(JSON.parse(readFileSync(out, "utf8")).removed).toBe(true);
   });
+
+  it("3 on a link that finds the edge already exists (duplicate)", async () => {
+    // Establish the edge first, then repeat the identical link.
+    expect((await sh(`${cli} link t-21 t-22 --type blocks > /dev/null`)).code).toBe(0);
+    const out = join(dir, "dup-link.json");
+    expect((await sh(`${cli} link t-21 t-22 --type blocks > '${out}'`)).code).toBe(3);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.ok).toBe(true);
+    expect(result.linked).toBe(false);
+    expect(result.edge).toContain("ALREADY LINKED");
+  });
 });
 
 // The t-574 fix: --type is now required by the binding. Before 0.3.0 the CLI
@@ -222,6 +233,7 @@ describe("--type requirement on link / unlink", () => {
     expect((await sh(`${cli} link t-9 t-10 --type blocks > '${out}'`)).code).toBe(0);
     const result = JSON.parse(readFileSync(out, "utf8"));
     expect(result.ok).toBe(true);
+    expect(result.linked).toBe(true);
     // Edge echo confirms the command took effect.
     expect(result.edge).toMatch(/BLOCKED BY/);
   });
