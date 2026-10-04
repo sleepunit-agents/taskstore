@@ -57,6 +57,45 @@ const actor = process.env.TASKSTORE_ACTOR ?? "art";
 const at = new Date().toISOString();
 const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"));
 
+// The flags each verb actually reads. A flag outside this set used to be
+// parsed into `flags` and then silently dropped — buildCommand only ever
+// looks up the keys it knows about, so a typo (--typ for --type) or a
+// stray flag (--bogus) vanished with no error, same failure class the
+// --type default used to be (see the link/unlink comment below): a
+// malformed command read back as a valid, narrower one. Unknown verbs are
+// already caught by the switch's default case; this catches unknown FLAGS
+// on a verb that otherwise matched.
+const KNOWN_FLAGS: Record<string, Set<string>> = {
+  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
+  claim: new Set(),
+  unclaim: new Set(),
+  close: new Set(["reason"]),
+  reopen: new Set(),
+  delete: new Set(),
+  update: new Set(["title", "description", "assignee", "priority"]),
+  comment: new Set(),
+  link: new Set(["type"]),
+  unlink: new Set(["type"]),
+  show: new Set(),
+  list: new Set(["status"]),
+  search: new Set(["status"]),
+  ready: new Set(),
+  report: new Set(),
+  export: new Set(),
+  import: new Set(),
+};
+
+function checkKnownFlags(): void {
+  const allowed = verb !== undefined ? KNOWN_FLAGS[verb] : undefined;
+  if (!allowed) return; // unknown verb: the switch's default case owns this error
+  const unknown = Object.keys(flags).filter((k) => !allowed.has(k));
+  if (unknown.length > 0) {
+    const plural = unknown.length > 1 ? "s" : "";
+    console.error(`unknown flag${plural} for '${verb}': ${unknown.map((k) => `--${k}`).join(", ")}`);
+    process.exit(2);
+  }
+}
+
 function buildCommand(): Command {
   switch (verb) {
     case "create": {
@@ -137,6 +176,7 @@ function buildCommand(): Command {
 }
 
 
+checkKnownFlags();
 const command = buildCommand();
 mkdirSync(dirname(dbPath), { recursive: true });
 const store = new SqliteStore(dbPath);

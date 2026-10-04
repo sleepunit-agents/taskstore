@@ -287,6 +287,47 @@ describe("edge echo wording and direction", () => {
   });
 });
 
+// t-893: an unknown flag used to be parsed into the generic `--key value`
+// map and then silently dropped — buildCommand only reads the keys it
+// recognizes — so a typo'd flag (--typ for --type) or a stray one (--bogus)
+// vanished with no error, same failure class the old --type default was:
+// a malformed command read back as a valid, narrower one.
+describe("unknown flags are rejected", () => {
+  it("unlink --bogus exits 2 and names the flag (the t-893 repro)", async () => {
+    const out = join(dir, "unknown-flag-unlink.err");
+    const code = await statusOf("unlink t-1 t-1 --bogus x --type blocks", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--bogus");
+  });
+
+  it("create --typ (typo of --type) exits 2 and names the flag", async () => {
+    const out = join(dir, "unknown-flag-create.err");
+    const code = await statusOf(`create "typo test" --typ bug`, `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--typ");
+  });
+
+  it("update --nonsense exits 2 and names the flag", async () => {
+    const out = join(dir, "unknown-flag-update.err");
+    const code = await statusOf("update t-1 --title X --nonsense y", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--nonsense");
+  });
+
+  it("a verb with no recognized flags (claim) still rejects an unknown one", async () => {
+    const out = join(dir, "unknown-flag-claim.err");
+    const code = await statusOf("claim t-1 --force", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--force");
+  });
+
+  it("known flags on link/unlink still pass validation and complete the command", async () => {
+    const out = join(dir, "known-flags-link.json");
+    expect((await sh(`${cli} link t-30 t-31 --type blocks > '${out}'`)).code).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).linked).toBe(true);
+  });
+});
+
 // TASKSTORE_ACTOR is the binding's actor injection point. The CLI defaults to
 // "art" when the var is absent; when set, it stamps the actor on every
 // command that records one. The core stores it as createdBy on tasks.
