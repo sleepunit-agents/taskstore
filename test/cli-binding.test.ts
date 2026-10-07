@@ -314,14 +314,13 @@ describe("unknown flags are rejected", () => {
     expect(readFileSync(out, "utf8")).toContain("--nonsense");
   });
 
-  it("a verb with no recognized flags (claim) still rejects an unknown one", async () => {
-    const out = join(dir, "unknown-flag-claim.err");
-    const code = await statusOf("claim t-1 --force", `2> '${out}'`);
-    expect(code).toBe(2);
-    expect(readFileSync(out, "utf8")).toContain("--force");
+  it("a verb with no recognized flags (claim) still rejects an unknown one, singular prefix, exact message", async () => {
+    const run = await sh(`${cli} claim t-1 --force`);
+    expect(run.code).toBe(2);
+    expect(run.stderr.trim()).toBe("unknown flag for 'claim': --force");
   });
 
-  it("known flags on link/unlink still pass validation and complete the command", async () => {
+  it("known flags on link still pass validation and complete the command", async () => {
     const out = join(dir, "known-flags-link.json");
     expect((await sh(`${cli} link t-30 t-31 --type blocks > '${out}'`)).code).toBe(0);
     expect(JSON.parse(readFileSync(out, "utf8")).linked).toBe(true);
@@ -401,51 +400,68 @@ describe("unknown flags are rejected", () => {
     expect(shown.task.closeReason).toBe("no longer needed");
   });
 
+  // Self-contained: creates both an open and a closed task itself, rather
+  // than relying on an earlier test in the file having left a closed task
+  // behind. Round 3 (cold-review) found the first version of this test
+  // discriminated only by accident of execution order — every pre-existing
+  // task was open, so a doList that ignored c.status entirely would have
+  // passed identically.
   it("list --status open is known and filters entries to that status", async () => {
-    const createOut = join(dir, "list-status-create.json");
-    await sh(`${cli} create "stays open for list filter" > '${createOut}'`);
-    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+    const openOut = join(dir, "list-status-create-open.json");
+    await sh(`${cli} create "stays open for list filter" > '${openOut}'`);
+    const openId = (JSON.parse(readFileSync(openOut, "utf8")).id) as string;
+
+    const closedOut = join(dir, "list-status-create-closed.json");
+    await sh(`${cli} create "closed for list filter" > '${closedOut}'`);
+    const closedId = (JSON.parse(readFileSync(closedOut, "utf8")).id) as string;
+    await sh(`${cli} close ${closedId} > /dev/null`);
 
     const out = join(dir, "list-status.json");
     const run = await sh(`${cli} list --status open > '${out}'`);
     expect(run.code).toBe(0);
     const result = JSON.parse(readFileSync(out, "utf8")) as { entries: Array<{ id: string; status: string }> };
-    expect(result.entries.some((e) => e.id === id)).toBe(true);
-    expect(result.entries.every((e) => e.status === "open")).toBe(true);
+    const ids = result.entries.map((e) => e.id);
+    expect(ids).toContain(openId);
+    expect(ids).not.toContain(closedId);
   });
 
+  // Same fix as list above: round 3 found this test's two matching tasks
+  // were both open, so the --status filter's effect traced to nothing —
+  // a doSearch that ignored c.status entirely passed identically. A second,
+  // closed task matching the same search text makes the filter load-bearing.
   it("search --status open is known and filters matches to that status", async () => {
-    const createOut = join(dir, "search-status-create.json");
-    await sh(`${cli} create "zzsearchtarget stays open" > '${createOut}'`);
-    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+    const openOut = join(dir, "search-status-create-open.json");
+    await sh(`${cli} create "zzsearchtarget stays open" > '${openOut}'`);
+    const openId = (JSON.parse(readFileSync(openOut, "utf8")).id) as string;
+
+    const closedOut = join(dir, "search-status-create-closed.json");
+    await sh(`${cli} create "zzsearchtarget gets closed" > '${closedOut}'`);
+    const closedId = (JSON.parse(readFileSync(closedOut, "utf8")).id) as string;
+    await sh(`${cli} close ${closedId} > /dev/null`);
 
     const out = join(dir, "search-status.json");
     const run = await sh(`${cli} search zzsearchtarget --status open > '${out}'`);
     expect(run.code).toBe(0);
     const result = JSON.parse(readFileSync(out, "utf8")) as { entries: Array<{ id: string; status: string }> };
-    expect(result.entries.some((e) => e.id === id)).toBe(true);
-    expect(result.entries.every((e) => e.status === "open")).toBe(true);
+    const ids = result.entries.map((e) => e.id);
+    expect(ids).toContain(openId);
+    expect(ids).not.toContain(closedId);
   });
 
   // The exact message shape — prefix, pluralization, comma-join — was
   // asserted only via toContain() on a single flag before this. Two unknown
   // flags together is the case that actually exercises pluralization and
-  // the join.
+  // the join. No pipe is involved, so the plain sh() helper's own .code/
+  // .stderr are the CLI's, matching the nearest sibling idiom (the "2 on an
+  // unknown verb" test above) rather than statusOf's temp-file dance, which
+  // exists for status-through-a-pipe cases this isn't.
   it("two unknown flags together are both named, comma-joined, with the plural prefix", async () => {
-    const out = join(dir, "unknown-flags-plural.err");
     // Each flag needs a value: argv parsing binds the NEXT token as a flag's
     // value regardless of its own leading "--", so "--force --nonsense" with
     // no values parses as one flag (force="--nonsense"), not two.
-    const code = await statusOf("claim t-1 --force x --nonsense y", `2> '${out}'`);
-    expect(code).toBe(2);
-    expect(readFileSync(out, "utf8").trim()).toBe("unknown flags for 'claim': --force, --nonsense");
-  });
-
-  it("a single unknown flag uses the singular prefix, exact message", async () => {
-    const out = join(dir, "unknown-flag-singular.err");
-    const code = await statusOf("claim t-1 --force", `2> '${out}'`);
-    expect(code).toBe(2);
-    expect(readFileSync(out, "utf8").trim()).toBe("unknown flag for 'claim': --force");
+    const run = await sh(`${cli} claim t-1 --force x --nonsense y`);
+    expect(run.code).toBe(2);
+    expect(run.stderr.trim()).toBe("unknown flags for 'claim': --force, --nonsense");
   });
 
   // checkKnownFlags() runs before buildCommand() in cli.ts so that a bad
@@ -458,11 +474,48 @@ describe("unknown flags are rejected", () => {
   // any execution of buildCommand's import branch before the flag check
   // would fail this test.
   it("an unknown flag on import is caught before the file is read (exit 2, not a crash)", async () => {
-    const out = join(dir, "unknown-flag-import.err");
     const missing = join(dir, "does-not-exist.json");
-    const code = await statusOf(`import '${missing}' --bogus x`, `2> '${out}'`);
-    expect(code).toBe(2);
-    expect(readFileSync(out, "utf8")).toContain("--bogus");
+    const run = await sh(`${cli} import '${missing}' --bogus x`);
+    expect(run.code).toBe(2);
+    expect(run.stderr).toContain("--bogus");
+  });
+
+  // Round 3 (cold-review): seven of KNOWN_FLAGS' seventeen entries
+  // (unclaim/reopen/delete/comment/ready/report/export — every verb with an
+  // empty flag Set) had no witness of any kind, and four more (close/link/
+  // list/search) had positive-flag coverage but no unknown-flag rejection
+  // test. checkKnownFlags() returns early when a verb has no entry at all
+  // (`if (!allowed) return;`), so deleting any one of these eleven from
+  // KNOWN_FLAGS — or adding a stray name to one of their Sets — would leave
+  // the whole suite green while that verb silently reverted to the
+  // pre-t-893 drop-the-flag behavior. One case per verb closes the gap;
+  // claim/create/update/unlink already have their own dedicated tests above
+  // with richer assertions (exact message, a realistic typo) and are not
+  // repeated here. None of these commands can mutate the store even if the
+  // flag check were somehow bypassed and the command ran for real (delete/
+  // reopen/unclaim on t-1 would still only hit a state-transition refusal),
+  // but the check firing first is exactly the property under test.
+  describe("every remaining KNOWN_FLAGS entry rejects an unknown flag", () => {
+    const cases: Record<string, string> = {
+      unclaim: "unclaim t-1 --bogus x",
+      reopen: "reopen t-1 --bogus x",
+      delete: "delete t-1 --bogus x",
+      comment: `comment t-1 "hi" --bogus x`,
+      ready: "ready --bogus x",
+      report: "report --bogus x",
+      export: "export --bogus x",
+      close: "close t-1 --bogus x",
+      link: "link t-1 t-2 --type blocks --bogus x",
+      list: "list --bogus x",
+      search: "search foo --bogus x",
+    };
+    for (const [verb, command] of Object.entries(cases)) {
+      it(`${verb} --bogus exits 2 and names the flag`, async () => {
+        const run = await sh(`${cli} ${command}`);
+        expect(run.code).toBe(2);
+        expect(run.stderr).toContain("--bogus");
+      });
+    }
   });
 });
 

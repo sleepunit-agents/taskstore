@@ -7,6 +7,7 @@
 //   taskstore ready
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
+//                    [--legacy-ref r]
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
