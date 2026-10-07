@@ -326,6 +326,58 @@ describe("unknown flags are rejected", () => {
     expect((await sh(`${cli} link t-30 t-31 --type blocks > '${out}'`)).code).toBe(0);
     expect(JSON.parse(readFileSync(out, "utf8")).linked).toBe(true);
   });
+
+  it("known flags on unlink still pass validation and complete the command", async () => {
+    await sh(`${cli} link t-32 t-33 --type blocks > /dev/null`);
+    const out = join(dir, "known-flags-unlink.json");
+    expect((await sh(`${cli} unlink t-32 t-33 --type blocks > '${out}'`)).code).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).removed).toBe(true);
+  });
+
+  // Every real flag create reads, in one command — a wrong allowlist entry
+  // (e.g. the field name buildCommand STORES under, "specItemRef", instead
+  // of the flag CALLERS spell, "spec-item-ref") would reject a legitimate
+  // caller. The t-893 report was felag audit's own create call with these.
+  it("all seven create flags are known and the command completes", async () => {
+    const out = join(dir, "known-flags-create.json");
+    const code = await sh(
+      `${cli} create "full flags" --description d --type bug --priority 2 --parent t-1 --spec-item-ref r --criterion-id c --legacy-ref beads:1 > '${out}'`,
+    );
+    expect(code.code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8"));
+    expect(result.ok).toBe(true);
+  });
+
+  it("all three update flags (title, description, assignee) alongside priority are known", async () => {
+    const out = join(dir, "known-flags-update.json");
+    const code = await sh(
+      `${cli} update t-1 --title "new title" --description "new desc" --assignee mark --priority 1 > '${out}'`,
+    );
+    expect(code.code).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).ok).toBe(true);
+  });
+
+  // t-893 round 1 (cold-review, 2026-10-07): a bare object literal's
+  // inherited setter swallows --__proto__ before Object.keys ever sees it —
+  // the exact silent-drop this whole check exists to close.
+  it("--__proto__ is rejected as an unknown flag, not silently dropped", async () => {
+    const out = join(dir, "proto-flag.err");
+    const code = await statusOf("show t-1 --__proto__ x", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--__proto__");
+  });
+
+  // Same round: KNOWN_FLAGS[verb] on a caller-controlled verb string resolves
+  // inherited Object.prototype members (toString, constructor, valueOf, ...)
+  // instead of falling through to "unknown verb" — without Object.hasOwn this
+  // crashes with an uncaught TypeError (exit 1) instead of the switch
+  // default's usage message (exit 2).
+  it("a verb name colliding with Object.prototype falls through to 'unknown verb', not a crash", async () => {
+    const out = join(dir, "proto-verb.err");
+    const code = await statusOf("toString --x y", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("usage:");
+  });
 });
 
 // TASKSTORE_ACTOR is the binding's actor injection point. The CLI defaults to

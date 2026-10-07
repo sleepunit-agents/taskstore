@@ -27,7 +27,11 @@ const argv = process.argv.slice(2);
 const verb = argv.shift();
 
 const positional: string[] = [];
-const flags: Record<string, string> = {};
+// Object.create(null): a plain {} has a prototype, so `--__proto__ x` would
+// invoke the inherited __proto__ setter instead of creating an own key —
+// the value is silently swallowed and Object.keys(flags) never sees it,
+// which is exactly the silent-drop checkKnownFlags() below exists to close.
+const flags: Record<string, string> = Object.create(null);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith("--")) {
@@ -86,7 +90,13 @@ const KNOWN_FLAGS: Record<string, Set<string>> = {
 };
 
 function checkKnownFlags(): void {
-  const allowed = verb !== undefined ? KNOWN_FLAGS[verb] : undefined;
+  // Object.hasOwn, not a bare KNOWN_FLAGS[verb]: a caller-controlled verb
+  // string can name an inherited Object.prototype member (toString,
+  // constructor, valueOf, hasOwnProperty, ...). Without this check `taskstore
+  // toString --x y` binds `allowed` to that inherited function, `allowed.has`
+  // throws an uncaught TypeError, and the command exits 1 with a stack trace
+  // instead of the switch default's clean "unknown verb" / exit 2.
+  const allowed = verb !== undefined && Object.hasOwn(KNOWN_FLAGS, verb) ? KNOWN_FLAGS[verb] : undefined;
   if (!allowed) return; // unknown verb: the switch's default case owns this error
   const unknown = Object.keys(flags).filter((k) => !allowed.has(k));
   if (unknown.length > 0) {
