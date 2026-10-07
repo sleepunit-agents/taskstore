@@ -340,20 +340,20 @@ describe("unknown flags are rejected", () => {
   // caller. The t-893 report was felag audit's own create call with these.
   it("all seven create flags are known and the command completes", async () => {
     const out = join(dir, "known-flags-create.json");
-    const code = await sh(
+    const run = await sh(
       `${cli} create "full flags" --description d --type bug --priority 2 --parent t-1 --spec-item-ref r --criterion-id c --legacy-ref beads:1 > '${out}'`,
     );
-    expect(code.code).toBe(0);
+    expect(run.code).toBe(0);
     const result = JSON.parse(readFileSync(out, "utf8"));
     expect(result.ok).toBe(true);
   });
 
   it("all three update flags (title, description, assignee) alongside priority are known", async () => {
     const out = join(dir, "known-flags-update.json");
-    const code = await sh(
+    const run = await sh(
       `${cli} update t-1 --title "new title" --description "new desc" --assignee mark --priority 1 > '${out}'`,
     );
-    expect(code.code).toBe(0);
+    expect(run.code).toBe(0);
     expect(JSON.parse(readFileSync(out, "utf8")).ok).toBe(true);
   });
 
@@ -377,6 +377,92 @@ describe("unknown flags are rejected", () => {
     const code = await statusOf("toString --x y", `2> '${out}'`);
     expect(code).toBe(2);
     expect(readFileSync(out, "utf8")).toContain("usage:");
+  });
+
+  // t-893 round 2 (cold-review): create/update/link/unlink had positive
+  // coverage but close --reason, list --status, and search --status did not
+  // — the three remaining KNOWN_FLAGS entries with no witness that the
+  // allowlist actually lets the real flag through rather than merely
+  // rejecting the unknown one.
+  it("close --reason is known, completes the command, and is stored", async () => {
+    const createOut = join(dir, "close-reason-create.json");
+    await sh(`${cli} create "to be closed" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    const closeOut = join(dir, "close-reason-close.json");
+    const run = await sh(`${cli} close ${id} --reason "no longer needed" > '${closeOut}'`);
+    expect(run.code).toBe(0);
+    expect(JSON.parse(readFileSync(closeOut, "utf8")).ok).toBe(true);
+
+    const showOut = join(dir, "close-reason-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.status).toBe("closed");
+    expect(shown.task.closeReason).toBe("no longer needed");
+  });
+
+  it("list --status open is known and filters entries to that status", async () => {
+    const createOut = join(dir, "list-status-create.json");
+    await sh(`${cli} create "stays open for list filter" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    const out = join(dir, "list-status.json");
+    const run = await sh(`${cli} list --status open > '${out}'`);
+    expect(run.code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8")) as { entries: Array<{ id: string; status: string }> };
+    expect(result.entries.some((e) => e.id === id)).toBe(true);
+    expect(result.entries.every((e) => e.status === "open")).toBe(true);
+  });
+
+  it("search --status open is known and filters matches to that status", async () => {
+    const createOut = join(dir, "search-status-create.json");
+    await sh(`${cli} create "zzsearchtarget stays open" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    const out = join(dir, "search-status.json");
+    const run = await sh(`${cli} search zzsearchtarget --status open > '${out}'`);
+    expect(run.code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8")) as { entries: Array<{ id: string; status: string }> };
+    expect(result.entries.some((e) => e.id === id)).toBe(true);
+    expect(result.entries.every((e) => e.status === "open")).toBe(true);
+  });
+
+  // The exact message shape — prefix, pluralization, comma-join — was
+  // asserted only via toContain() on a single flag before this. Two unknown
+  // flags together is the case that actually exercises pluralization and
+  // the join.
+  it("two unknown flags together are both named, comma-joined, with the plural prefix", async () => {
+    const out = join(dir, "unknown-flags-plural.err");
+    // Each flag needs a value: argv parsing binds the NEXT token as a flag's
+    // value regardless of its own leading "--", so "--force --nonsense" with
+    // no values parses as one flag (force="--nonsense"), not two.
+    const code = await statusOf("claim t-1 --force x --nonsense y", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8").trim()).toBe("unknown flags for 'claim': --force, --nonsense");
+  });
+
+  it("a single unknown flag uses the singular prefix, exact message", async () => {
+    const out = join(dir, "unknown-flag-singular.err");
+    const code = await statusOf("claim t-1 --force", `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8").trim()).toBe("unknown flag for 'claim': --force");
+  });
+
+  // checkKnownFlags() runs before buildCommand() in cli.ts so that a bad
+  // flag is caught before any verb-specific work happens. import's
+  // buildCommand branch reads and JSON.parses a file off disk — if ordering
+  // ever flipped, an unknown flag on an import whose file is missing or
+  // malformed would surface as an uncaught JSON.parse/readFileSync
+  // exception (exit 1, stack trace) instead of the contracted "unknown
+  // flag" usage error (exit 2). The file deliberately does not exist, so
+  // any execution of buildCommand's import branch before the flag check
+  // would fail this test.
+  it("an unknown flag on import is caught before the file is read (exit 2, not a crash)", async () => {
+    const out = join(dir, "unknown-flag-import.err");
+    const missing = join(dir, "does-not-exist.json");
+    const code = await statusOf(`import '${missing}' --bogus x`, `2> '${out}'`);
+    expect(code).toBe(2);
+    expect(readFileSync(out, "utf8")).toContain("--bogus");
   });
 });
 
