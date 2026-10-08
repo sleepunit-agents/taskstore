@@ -7,6 +7,7 @@
 //   taskstore ready
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
+//                    [--legacy-ref r]
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
@@ -27,7 +28,11 @@ const argv = process.argv.slice(2);
 const verb = argv.shift();
 
 const positional: string[] = [];
-const flags: Record<string, string> = {};
+// Object.create(null): a plain {} has a prototype, so `--__proto__ x` would
+// invoke the inherited __proto__ setter instead of creating an own key —
+// the value is silently swallowed and Object.keys(flags) never sees it,
+// which is exactly the silent-drop checkKnownFlags() below exists to close.
+const flags: Record<string, string> = Object.create(null);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith("--")) {
@@ -56,6 +61,51 @@ process.stdout.on("error", (err: NodeJS.ErrnoException) => {
 const actor = process.env.TASKSTORE_ACTOR ?? "art";
 const at = new Date().toISOString();
 const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"));
+
+// The flags each verb actually reads. A flag outside this set used to be
+// parsed into `flags` and then silently dropped — buildCommand only ever
+// looks up the keys it knows about, so a typo (--typ for --type) or a
+// stray flag (--bogus) vanished with no error, same failure class the
+// --type default used to be (see the link/unlink comment below): a
+// malformed command read back as a valid, narrower one. Unknown verbs are
+// already caught by the switch's default case; this catches unknown FLAGS
+// on a verb that otherwise matched.
+const KNOWN_FLAGS: Record<string, Set<string>> = {
+  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
+  claim: new Set(),
+  unclaim: new Set(),
+  close: new Set(["reason"]),
+  reopen: new Set(),
+  delete: new Set(),
+  update: new Set(["title", "description", "assignee", "priority"]),
+  comment: new Set(),
+  link: new Set(["type"]),
+  unlink: new Set(["type"]),
+  show: new Set(),
+  list: new Set(["status"]),
+  search: new Set(["status"]),
+  ready: new Set(),
+  report: new Set(),
+  export: new Set(),
+  import: new Set(),
+};
+
+function checkKnownFlags(): void {
+  // Object.hasOwn, not a bare KNOWN_FLAGS[verb]: a caller-controlled verb
+  // string can name an inherited Object.prototype member (toString,
+  // constructor, valueOf, hasOwnProperty, ...). Without this check `taskstore
+  // toString --x y` binds `allowed` to that inherited function, `allowed.has`
+  // throws an uncaught TypeError, and the command exits 1 with a stack trace
+  // instead of the switch default's clean "unknown verb" / exit 2.
+  const allowed = verb !== undefined && Object.hasOwn(KNOWN_FLAGS, verb) ? KNOWN_FLAGS[verb] : undefined;
+  if (!allowed) return; // unknown verb: the switch's default case owns this error
+  const unknown = Object.keys(flags).filter((k) => !allowed.has(k));
+  if (unknown.length > 0) {
+    const plural = unknown.length > 1 ? "s" : "";
+    console.error(`unknown flag${plural} for '${verb}': ${unknown.map((k) => `--${k}`).join(", ")}`);
+    process.exit(2);
+  }
+}
 
 function buildCommand(): Command {
   switch (verb) {
@@ -137,6 +187,7 @@ function buildCommand(): Command {
 }
 
 
+checkKnownFlags();
 const command = buildCommand();
 mkdirSync(dirname(dbPath), { recursive: true });
 const store = new SqliteStore(dbPath);
