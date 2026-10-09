@@ -184,9 +184,11 @@ const VERBS: Record<string, VerbEntry> = {
 // Object.hasOwn, not a bare VERBS[verb]: a caller-controlled verb string can
 // name an inherited Object.prototype member (toString, constructor, valueOf,
 // hasOwnProperty, ...). Without this check `taskstore toString --x y` binds
-// `entry` to that inherited function, `entry.flags` throws an uncaught
-// TypeError, and the command exits 1 with a stack trace instead of the
-// clean "unknown verb" / exit 2 both callers below need.
+// `entry` to that inherited function; `entry.flags.has(...)` (checkKnownFlags,
+// only reached when a flag was passed) or `entry.build(...)` (buildCommand,
+// otherwise) then throws an uncaught TypeError, and the command exits 1 with
+// a stack trace instead of the clean "unknown verb" / exit 2 both callers
+// below need.
 function verbEntry(): VerbEntry | undefined {
   return verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb] : undefined;
 }
@@ -217,7 +219,6 @@ function buildCommand(): Command {
   }
   return entry.build(positional, flags);
 }
-
 
 checkKnownFlags();
 const command = buildCommand();

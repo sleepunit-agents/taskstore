@@ -164,7 +164,13 @@ describe("exit codes", () => {
   it("2 on an unknown verb", async () => {
     const run = await sh(`${cli} frobnicate > /dev/null`);
     expect(run.code).toBe(2);
-    expect(run.stderr).toContain("usage:");
+    // Exact match, not toContain: the usage line is now generated from
+    // VERBS' own key order (cli.ts) rather than a hardcoded literal, so
+    // this is the only thing that would catch a re-sorted or reordered
+    // VERBS table silently changing the contracted error text.
+    expect(run.stderr.trim()).toBe(
+      "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|unlink|show|list|search|ready|report|export|import> ...",
+    );
   });
 
   it("1 on a rejected command", async () => {
@@ -366,23 +372,31 @@ describe("unknown flags are rejected", () => {
     expect(readFileSync(out, "utf8")).toContain("--__proto__");
   });
 
-  // Same round: KNOWN_FLAGS[verb] on a caller-controlled verb string resolves
-  // inherited Object.prototype members (toString, constructor, valueOf, ...)
-  // instead of falling through to "unknown verb" — without Object.hasOwn this
-  // crashes with an uncaught TypeError (exit 1) instead of the switch
-  // default's usage message (exit 2).
-  it("a verb name colliding with Object.prototype falls through to 'unknown verb', not a crash", async () => {
-    const out = join(dir, "proto-verb.err");
-    const code = await statusOf("toString --x y", `2> '${out}'`);
-    expect(code).toBe(2);
-    expect(readFileSync(out, "utf8")).toContain("usage:");
-  });
+  // Same round: VERBS[verb] (via verbEntry()'s Object.hasOwn guard) on a
+  // caller-controlled verb string resolves inherited Object.prototype
+  // members (toString, constructor, valueOf, ...) instead of falling
+  // through to "unknown verb" — without Object.hasOwn this crashes with an
+  // uncaught TypeError (exit 1) instead of buildCommand's usage message
+  // (exit 2). One case per distinct prototype member shape: toString is a
+  // plain function, constructor is special-formed (every object has one,
+  // including the VERBS literal itself), __proto__ is an accessor, not a
+  // data property — t-1089's round 1 cold-review found only toString had a
+  // witness.
+  it.each(["toString", "constructor", "__proto__"])(
+    "a verb name colliding with Object.prototype (%s) falls through to 'unknown verb', not a crash",
+    async (verb) => {
+      const out = join(dir, `proto-verb-${verb.replace(/[^a-z]/gi, "")}.err`);
+      const code = await statusOf(`${verb} --x y`, `2> '${out}'`);
+      expect(code).toBe(2);
+      expect(readFileSync(out, "utf8")).toContain("usage:");
+    },
+  );
 
   // t-893 round 2 (cold-review): create/update/link/unlink had positive
   // coverage but close --reason, list --status, and search --status did not
-  // — the three remaining KNOWN_FLAGS entries with no witness that the
-  // allowlist actually lets the real flag through rather than merely
-  // rejecting the unknown one.
+  // — the three remaining VERBS entries with no witness that the allowlist
+  // actually lets the real flag through rather than merely rejecting the
+  // unknown one.
   it("close --reason is known, completes the command, and is stored", async () => {
     const createOut = join(dir, "close-reason-create.json");
     await sh(`${cli} create "to be closed" > '${createOut}'`);
@@ -480,22 +494,22 @@ describe("unknown flags are rejected", () => {
     expect(run.stderr).toContain("--bogus");
   });
 
-  // Round 3 (cold-review): seven of KNOWN_FLAGS' seventeen entries
-  // (unclaim/reopen/delete/comment/ready/report/export — every verb with an
-  // empty flag Set) had no witness of any kind, and four more (close/link/
-  // list/search) had positive-flag coverage but no unknown-flag rejection
-  // test. checkKnownFlags() returns early when a verb has no entry at all
-  // (`if (!allowed) return;`), so deleting any one of these eleven from
-  // KNOWN_FLAGS — or adding a stray name to one of their Sets — would leave
-  // the whole suite green while that verb silently reverted to the
-  // pre-t-893 drop-the-flag behavior. One case per verb closes the gap;
-  // claim/create/update/unlink already have their own dedicated tests above
-  // with richer assertions (exact message, a realistic typo) and are not
-  // repeated here. None of these commands can mutate the store even if the
-  // flag check were somehow bypassed and the command ran for real (delete/
-  // reopen/unclaim on t-1 would still only hit a state-transition refusal),
-  // but the check firing first is exactly the property under test.
-  describe("every remaining KNOWN_FLAGS entry rejects an unknown flag", () => {
+  // Round 3 (cold-review): seven of VERBS' seventeen entries (unclaim/
+  // reopen/delete/comment/ready/report/export — every verb with an empty
+  // flag Set) had no witness of any kind, and four more (close/link/list/
+  // search) had positive-flag coverage but no unknown-flag rejection test.
+  // checkKnownFlags() returns early when a verb has no entry at all
+  // (`if (!entry) return;`), so deleting any one of these eleven from VERBS
+  // — or adding a stray name to one of their flag Sets — would leave the
+  // whole suite green while that verb silently reverted to the pre-t-893
+  // drop-the-flag behavior. One case per verb closes the gap; claim/create/
+  // update/unlink already have their own dedicated tests above with richer
+  // assertions (exact message, a realistic typo) and are not repeated here.
+  // None of these commands can mutate the store even if the flag check were
+  // somehow bypassed and the command ran for real (delete/reopen/unclaim on
+  // t-1 would still only hit a state-transition refusal), but the check
+  // firing first is exactly the property under test.
+  describe("every remaining VERBS entry rejects an unknown flag", () => {
     const cases: Record<string, string> = {
       unclaim: "unclaim t-1 --bogus x",
       reopen: "reopen t-1 --bogus x",
