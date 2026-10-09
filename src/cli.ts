@@ -8,7 +8,7 @@
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
 //                    [--legacy-ref r]
-//   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
+//   taskstore claim <id> | unclaim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
 //   taskstore link <id> <dependsOn> --type blocks|parent-child
@@ -62,6 +62,11 @@ const actor = process.env.TASKSTORE_ACTOR ?? "art";
 const at = new Date().toISOString();
 const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"));
 
+interface VerbEntry {
+  allowedFlags: Set<string>;
+  build: (positional: string[], flags: Record<string, string>) => Command;
+}
+
 // One table drives both the flag allowlist and the command dispatch — the
 // flags a verb accepts live right next to the build() that reads them, so
 // a verb added here is automatically known to both checks. Before this, the
@@ -71,14 +76,13 @@ const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"
 // KNOWN_FLAGS would silently fall through to checkKnownFlags()'s "unknown
 // verb, not my problem" early return and ship with NO flag validation at
 // all — the exact pre-t-893 silent-drop bug class, just moved one level up.
-interface VerbEntry {
-  flags: Set<string>;
-  build: (positional: string[], flags: Record<string, string>) => Command;
-}
-
+// `satisfies`, not an annotation: an annotation widens VERBS' type to
+// Record<string, VerbEntry>, which erases its own key set and defeats the
+// "one table pins both" property this comment claims — satisfies checks
+// the same shape without erasing it.
 const VERBS = {
   create: {
-    flags: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
+    allowedFlags: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
     build: (positional, flags) => {
       const c: Command = { op: "create", title: positional[0], actor, at };
       if (flags.description !== undefined) c.description = flags.description;
@@ -92,15 +96,15 @@ const VERBS = {
     },
   },
   claim: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "claim", id: positional[0], actor, at }),
   },
   unclaim: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "unclaim", id: positional[0], actor, at }),
   },
   close: {
-    flags: new Set(["reason"]),
+    allowedFlags: new Set(["reason"]),
     build: (positional, flags) => {
       const c: Command = { op: "close", id: positional[0], actor, at };
       if (flags.reason !== undefined) c.reason = flags.reason;
@@ -108,15 +112,15 @@ const VERBS = {
     },
   },
   reopen: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "reopen", id: positional[0], actor, at }),
   },
   delete: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "delete", id: positional[0], actor, at }),
   },
   update: {
-    flags: new Set(["title", "description", "assignee", "priority"]),
+    allowedFlags: new Set(["title", "description", "assignee", "priority"]),
     build: (positional, flags) => {
       const set: Record<string, unknown> = {};
       for (const k of ["title", "description", "assignee"]) if (flags[k] !== undefined) set[k] = flags[k];
@@ -125,7 +129,7 @@ const VERBS = {
     },
   },
   comment: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "comment", id: positional[0], text: positional[1], actor, at }),
   },
   // --type is passed through ABSENT when absent. It used to default to
@@ -133,19 +137,19 @@ const VERBS = {
   // the ready queue; the core has always required the field (E_MISSING_FIELD)
   // and the binding was overriding that refusal with the destructive choice.
   link: {
-    flags: new Set(["type"]),
+    allowedFlags: new Set(["type"]),
     build: (positional, flags) => ({ op: "link", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at }),
   },
   unlink: {
-    flags: new Set(["type"]),
+    allowedFlags: new Set(["type"]),
     build: (positional, flags) => ({ op: "unlink", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at }),
   },
   show: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => ({ op: "show", id: positional[0] }),
   },
   list: {
-    flags: new Set(["status"]),
+    allowedFlags: new Set(["status"]),
     build: (_positional, flags) => {
       const c: Command = { op: "list" };
       if (flags.status !== undefined) c.status = flags.status;
@@ -153,7 +157,7 @@ const VERBS = {
     },
   },
   search: {
-    flags: new Set(["status"]),
+    allowedFlags: new Set(["status"]),
     build: (positional, flags) => {
       const c: Command = { op: "search", q: positional[0] };
       if (flags.status !== undefined) c.status = flags.status;
@@ -161,19 +165,19 @@ const VERBS = {
     },
   },
   ready: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: () => ({ op: "ready" }),
   },
   report: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: () => ({ op: "report" }),
   },
   export: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: () => ({ op: "export" }),
   },
   import: {
-    flags: new Set(),
+    allowedFlags: new Set(),
     build: (positional) => {
       const payload = JSON.parse(readFileSync(positional[0], "utf8")) as Record<string, unknown>;
       return { op: "import", tasks: payload.tasks, links: payload.links, actor, at };
@@ -182,13 +186,14 @@ const VERBS = {
 } satisfies Record<string, VerbEntry>;
 
 // Object.hasOwn, not a bare VERBS[verb]: a caller-controlled verb string can
-// name an inherited Object.prototype member (toString, constructor, valueOf,
-// hasOwnProperty, ...). Without this check `taskstore toString --x y` binds
-// `entry` to that inherited function; `entry.flags.has(...)` (checkKnownFlags,
-// only reached when a flag was passed) or `entry.build(...)` (buildCommand,
-// otherwise) then throws an uncaught TypeError, and the command exits 1 with
-// a stack trace instead of the clean "unknown verb" / exit 2 both callers
-// below need.
+// name an inherited Object.prototype member — a plain function (toString,
+// valueOf, hasOwnProperty), the special-formed constructor, or the __proto__
+// accessor, which resolves to Object.prototype itself. Without this check
+// `taskstore toString --x y` binds `entry` to one of those instead of
+// `undefined`; `entry.allowedFlags.has(...)` (checkKnownFlags, only reached
+// when a flag was passed) or `entry.build(...)` (buildCommand, otherwise)
+// then throws an uncaught TypeError, and the command exits 1 with a stack
+// trace instead of the clean "unknown verb" / exit 2 both callers below need.
 function verbEntry(): VerbEntry | undefined {
   return verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb as keyof typeof VERBS] : undefined;
 }
@@ -196,7 +201,7 @@ function verbEntry(): VerbEntry | undefined {
 function checkKnownFlags(): void {
   const entry = verbEntry();
   if (!entry) return; // unknown verb: buildCommand's own `if (!entry)` branch owns this error
-  const unknown = Object.keys(flags).filter((k) => !entry.flags.has(k));
+  const unknown = Object.keys(flags).filter((k) => !entry.allowedFlags.has(k));
   if (unknown.length > 0) {
     const plural = unknown.length > 1 ? "s" : "";
     console.error(`unknown flag${plural} for '${verb}': ${unknown.map((k) => `--${k}`).join(", ")}`);
