@@ -76,7 +76,7 @@ interface VerbEntry {
   build: (positional: string[], flags: Record<string, string>) => Command;
 }
 
-const VERBS: Record<string, VerbEntry> = {
+const VERBS = {
   create: {
     flags: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
     build: (positional, flags) => {
@@ -179,7 +179,7 @@ const VERBS: Record<string, VerbEntry> = {
       return { op: "import", tasks: payload.tasks, links: payload.links, actor, at };
     },
   },
-};
+} satisfies Record<string, VerbEntry>;
 
 // Object.hasOwn, not a bare VERBS[verb]: a caller-controlled verb string can
 // name an inherited Object.prototype member (toString, constructor, valueOf,
@@ -190,12 +190,12 @@ const VERBS: Record<string, VerbEntry> = {
 // a stack trace instead of the clean "unknown verb" / exit 2 both callers
 // below need.
 function verbEntry(): VerbEntry | undefined {
-  return verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb] : undefined;
+  return verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb as keyof typeof VERBS] : undefined;
 }
 
 function checkKnownFlags(): void {
   const entry = verbEntry();
-  if (!entry) return; // unknown verb: buildCommand's fallthrough owns this error
+  if (!entry) return; // unknown verb: buildCommand's own `if (!entry)` branch owns this error
   const unknown = Object.keys(flags).filter((k) => !entry.flags.has(k));
   if (unknown.length > 0) {
     const plural = unknown.length > 1 ? "s" : "";

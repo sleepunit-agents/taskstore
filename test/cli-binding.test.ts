@@ -21,7 +21,7 @@
 
 import Database from "better-sqlite3";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -388,7 +388,9 @@ describe("unknown flags are rejected", () => {
       const out = join(dir, `proto-verb-${verb.replace(/[^a-z]/gi, "")}.err`);
       const code = await statusOf(`${verb} --x y`, `2> '${out}'`);
       expect(code).toBe(2);
-      expect(readFileSync(out, "utf8")).toContain("usage:");
+      expect(readFileSync(out, "utf8").trim()).toBe(
+        "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|unlink|show|list|search|ready|report|export|import> ...",
+      );
     },
   );
 
@@ -494,17 +496,19 @@ describe("unknown flags are rejected", () => {
     expect(run.stderr).toContain("--bogus");
   });
 
-  // Round 3 (cold-review): seven of VERBS' seventeen entries (unclaim/
-  // reopen/delete/comment/ready/report/export — every verb with an empty
-  // flag Set) had no witness of any kind, and four more (close/link/list/
-  // search) had positive-flag coverage but no unknown-flag rejection test.
-  // checkKnownFlags() returns early when a verb has no entry at all
-  // (`if (!entry) return;`), so deleting any one of these eleven from VERBS
-  // — or adding a stray name to one of their flag Sets — would leave the
-  // whole suite green while that verb silently reverted to the pre-t-893
-  // drop-the-flag behavior. One case per verb closes the gap; claim/create/
-  // update/unlink already have their own dedicated tests above with richer
-  // assertions (exact message, a realistic typo) and are not repeated here.
+  // Round 3 (cold-review): seven of VERBS' entries (unclaim/reopen/delete/
+  // comment/ready/report/export — each with an empty flag Set) had no
+  // witness of any kind, and four more (close/link/list/search) had
+  // positive-flag coverage but no unknown-flag rejection test. One case per
+  // verb proves that verb's own flags Set still rejects a name it does not
+  // contain — claim/create/update/unlink already have their own dedicated
+  // tests above with richer assertions (exact message, a realistic typo)
+  // and are not repeated here. (This is the per-verb --bogus witness, not a
+  // general guard against a Set widening to allow some OTHER real flag
+  // name — t-1112 tracks that gap. Nor does it guard against a verb being
+  // deleted from VERBS outright: that now fails two different ways —
+  // `buildCommand`'s "unknown verb" branch fires, so `--bogus` never
+  // appears in stderr, and the usage line's pinned verb list above changes.)
   // None of these commands can mutate the store even if the flag check were
   // somehow bypassed and the command ran for real (delete/reopen/unclaim on
   // t-1 would still only hit a state-transition refusal), but the check
@@ -530,6 +534,144 @@ describe("unknown flags are rejected", () => {
         expect(run.stderr).toContain("--bogus");
       });
     }
+  });
+});
+
+// t-1089 round 2 (cold-review): the mechanical switch->VERBS conversion has
+// no witness that any of these eight verbs' build() is still keyed to its
+// own op. Command is `{ op: string } & Record<string, unknown>` (core.ts),
+// so a mis-keyed entry (e.g. reopen's build returning op:"unclaim", or
+// comment reading positional[1]/[0] swapped) typechecks and passes every
+// --bogus-flag case above, because those only exercise checkKnownFlags(),
+// which runs and returns before build() ever does. create/update/link/
+// unlink/close/list/search already have dedicated positive-path tests
+// elsewhere in this file that would catch a mis-wiring; this closes the
+// same gap for the eight that didn't.
+describe("each verb's build is still wired to its own op", () => {
+  it("claim moves an open task to in_progress and stamps actor+startedAt", async () => {
+    const createOut = join(dir, "wiring-claim-create.json");
+    await sh(`${cli} create "wiring claim" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    await sh(`TASKSTORE_ACTOR=wiring-bot ${cli} claim ${id} > /dev/null`);
+
+    const showOut = join(dir, "wiring-claim-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.status).toBe("in_progress");
+    expect(shown.task.assignee).toBe("wiring-bot");
+    expect(shown.task.startedAt).toBeTruthy();
+  });
+
+  it("unclaim returns an in_progress task to open and clears assignee", async () => {
+    const createOut = join(dir, "wiring-unclaim-create.json");
+    await sh(`${cli} create "wiring unclaim" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+    await sh(`${cli} claim ${id} > /dev/null`);
+
+    await sh(`${cli} unclaim ${id} > /dev/null`);
+
+    const showOut = join(dir, "wiring-unclaim-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.status).toBe("open");
+    expect(shown.task.assignee).toBeUndefined();
+  });
+
+  it("reopen returns a closed task to open — not in_progress, not still closed", async () => {
+    const createOut = join(dir, "wiring-reopen-create.json");
+    await sh(`${cli} create "wiring reopen" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+    await sh(`${cli} close ${id} > /dev/null`);
+
+    await sh(`${cli} reopen ${id} > /dev/null`);
+
+    const showOut = join(dir, "wiring-reopen-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    expect(JSON.parse(readFileSync(showOut, "utf8")).task.status).toBe("open");
+  });
+
+  it("delete removes the task outright — show reports it unknown, not just closed", async () => {
+    const createOut = join(dir, "wiring-delete-create.json");
+    await sh(`${cli} create "wiring delete" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    expect((await sh(`${cli} delete ${id} > /dev/null`)).code).toBe(0);
+
+    const showOut = join(dir, "wiring-delete-show.json");
+    const showRun = await sh(`${cli} show ${id} > '${showOut}'`);
+    expect(showRun.code).toBe(1);
+    expect(JSON.parse(readFileSync(showOut, "utf8")).ok).toBe(false);
+  });
+
+  it("comment appends the given text, with the id and text in the right argv slots", async () => {
+    const createOut = join(dir, "wiring-comment-create.json");
+    await sh(`${cli} create "wiring comment" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    expect((await sh(`${cli} comment ${id} "hello from wiring test" > /dev/null`)).code).toBe(0);
+
+    const showOut = join(dir, "wiring-comment-show.json");
+    await sh(`${cli} show ${id} > '${showOut}'`);
+    const shown = JSON.parse(readFileSync(showOut, "utf8"));
+    expect(shown.task.comments.at(-1).text).toBe("hello from wiring test");
+    // Swapped argv slots (text where id goes) would have failed the create
+    // above's own id lookup already; an op mis-wired to update instead would
+    // leave the title untouched while still exiting 0 — check both.
+    expect(shown.task.title).toBe("wiring comment");
+  });
+
+  it("ready lists the open, unblocked task by id, not export's tasks/links shape", async () => {
+    const createOut = join(dir, "wiring-ready-create.json");
+    await sh(`${cli} create "wiring ready" > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    const out = join(dir, "wiring-ready.json");
+    expect((await sh(`${cli} ready > '${out}'`)).code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8")) as { entries: Array<{ id: string }> };
+    expect(result.entries.map((e) => e.id)).toContain(id);
+  });
+
+  it("report emits entries keyed by specItemRef, not export's tasks/links shape", async () => {
+    const createOut = join(dir, "wiring-report-create.json");
+    await sh(`${cli} create "wiring report" --spec-item-ref ac-wiring-test > '${createOut}'`);
+    const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+
+    const out = join(dir, "wiring-report.json");
+    expect((await sh(`${cli} report > '${out}'`)).code).toBe(0);
+    const result = JSON.parse(readFileSync(out, "utf8")) as {
+      entries: Array<{ specItemRef: string; taskRef: string }>;
+    };
+    expect(result.entries.find((e) => e.taskRef === id)?.specItemRef).toBe("ac-wiring-test");
+  });
+
+  it("import creates the task described in the payload file, not a no-op", async () => {
+    const payloadPath = join(dir, "wiring-import-payload.json");
+    writeFileSync(
+      payloadPath,
+      JSON.stringify({
+        tasks: [
+          {
+            id: "t-wiring-import-1",
+            title: "wiring import task",
+            type: "task",
+            status: "open",
+            priority: 2,
+            createdAt: new Date().toISOString(),
+            createdBy: "wiring-test",
+          },
+        ],
+      }),
+    );
+
+    const out = join(dir, "wiring-import.json");
+    const run = await sh(`${cli} import '${payloadPath}' > '${out}'`);
+    expect(run.code).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).ok).toBe(true);
+
+    const showOut = join(dir, "wiring-import-show.json");
+    expect((await sh(`${cli} show t-wiring-import-1 > '${showOut}'`)).code).toBe(0);
+    expect(JSON.parse(readFileSync(showOut, "utf8")).task.title).toBe("wiring import task");
   });
 });
 
