@@ -517,6 +517,40 @@ describe("unknown flags are rejected", () => {
       });
     }
   });
+
+  // t-1112: every --bogus/--force/--__proto__ case above proves a flagless
+  // verb rejects a flag that belongs to NO verb. None of them would catch
+  // the Set for one of these nine verbs silently widening to include a flag
+  // that IS real elsewhere (e.g. KNOWN_FLAGS.ready gaining
+  // new Set(["status"]) by a copy-paste from list/search) — the flag would
+  // parse fine, checkKnownFlags would pass it, and buildCommand's switch
+  // would drop it on the floor with zero test failure: the pre-t-893
+  // silent-drop class, on the widening axis instead of the unknown-flag one.
+  // Each case below uses a flag that is genuinely allowed on a DIFFERENT
+  // verb, so it only passes if this verb's own Set stays empty.
+  describe("flagless verbs reject a real flag borrowed from another verb (widening witness)", () => {
+    const cases: Record<string, { command: string; flag: string }> = {
+      claim: { command: "claim t-1 --spec-item-ref x", flag: "--spec-item-ref" },
+      unclaim: { command: "unclaim t-1 --reason x", flag: "--reason" },
+      reopen: { command: "reopen t-1 --title x", flag: "--title" },
+      delete: { command: "delete t-1 --description x", flag: "--description" },
+      comment: { command: `comment t-1 "hi" --priority 1`, flag: "--priority" },
+      show: { command: "show t-1 --type task", flag: "--type" },
+      // The ticket's own worked example (t-1112): ready sits right below
+      // list/search in KNOWN_FLAGS, both of which carry --status — the
+      // realistic copy-paste leak this whole case exists to catch.
+      ready: { command: "ready --status open", flag: "--status" },
+      report: { command: "report --parent t-1", flag: "--parent" },
+      export: { command: "export --legacy-ref x", flag: "--legacy-ref" },
+    };
+    for (const [verb, { command, flag }] of Object.entries(cases)) {
+      it(`${verb} ${flag} exits 2 and names the flag, even though ${flag} is real elsewhere`, async () => {
+        const run = await sh(`${cli} ${command}`);
+        expect(run.code).toBe(2);
+        expect(run.stderr).toContain(flag);
+      });
+    }
+  });
 });
 
 // TASKSTORE_ACTOR is the binding's actor injection point. The CLI defaults to
