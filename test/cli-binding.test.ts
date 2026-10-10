@@ -527,28 +527,42 @@ describe("unknown flags are rejected", () => {
   // would drop it on the floor with zero test failure: the pre-t-893
   // silent-drop class, on the widening axis instead of the unknown-flag one.
   // Each case below uses a flag that is genuinely allowed on a DIFFERENT
-  // verb (named as `from`, so the premise is checkable from this table
-  // rather than only by cross-referencing KNOWN_FLAGS), so the case only
-  // passes if this verb's own Set stays empty. `command` is derived from
-  // `args`/`flag` rather than duplicated, so the probed flag can't drift
-  // from the one actually sent.
+  // verb (`from`, exactly one, never a "verb/verb" guess), so the case only
+  // passes if THIS verb's own Set stays empty. The donorCases block further
+  // down executes that `from`/flag pairing directly, rather than leaving it
+  // as an asserted-but-unchecked premise.
+  //
+  // Round 2 (cold-review): claim/delete/comment don't just fail to mutate
+  // the shared t-1 fixture if the flag check is bypassed by a real widening
+  // bug — doLifecycle claims it, doDelete hard-removes it and cascades its
+  // links, doComment appends to it — which would corrupt state the REST of
+  // this (beforeAll-shared, file-wide) suite depends on, instead of just
+  // failing this one assertion locally. Every id-taking case below gets its
+  // own disposable task via create(), never the shared t-1/t-2 fixture.
   describe("flagless verbs reject a real flag borrowed from another verb (widening witness)", () => {
-    const cases: Record<string, { args: string; flag: string; from: string }> = {
-      claim: { args: "t-1", flag: "spec-item-ref", from: "create" },
-      unclaim: { args: "t-1", flag: "reason", from: "close" },
-      reopen: { args: "t-1", flag: "title", from: "update" },
-      delete: { args: "t-1", flag: "description", from: "update" },
-      comment: { args: `t-1 "hi"`, flag: "priority", from: "update" },
-      show: { args: "t-1", flag: "type", from: "link/unlink" },
+    const cases: Record<string, { needsOwnTask: boolean; extra?: string; flag: string; from: string }> = {
+      claim: { needsOwnTask: true, flag: "spec-item-ref", from: "create" },
+      unclaim: { needsOwnTask: true, flag: "reason", from: "close" },
+      reopen: { needsOwnTask: true, flag: "title", from: "update" },
+      delete: { needsOwnTask: true, flag: "description", from: "update" },
+      comment: { needsOwnTask: true, extra: `"hi"`, flag: "priority", from: "update" },
+      show: { needsOwnTask: true, flag: "type", from: "create" },
       // The ticket's own worked example (t-1112): ready sits right below
       // list/search in KNOWN_FLAGS, both of which carry --status — the
       // realistic copy-paste leak this whole case exists to catch.
-      ready: { args: "", flag: "status", from: "list/search" },
-      report: { args: "", flag: "parent", from: "create" },
-      export: { args: "", flag: "legacy-ref", from: "create" },
+      ready: { needsOwnTask: false, flag: "status", from: "list" },
+      report: { needsOwnTask: false, flag: "parent", from: "create" },
+      export: { needsOwnTask: false, flag: "legacy-ref", from: "create" },
     };
-    for (const [verb, { args, flag, from }] of Object.entries(cases)) {
+    for (const [verb, { needsOwnTask, extra, flag, from }] of Object.entries(cases)) {
       it(`${verb} --${flag} (real on ${from}) exits 2 and names the flag`, async () => {
+        let id = "";
+        if (needsOwnTask) {
+          const createOut = join(dir, `widening-seed-${verb}.json`);
+          await sh(`${cli} create "widening probe seed for ${verb}" > '${createOut}'`);
+          id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+        }
+        const args = [id, extra].filter(Boolean).join(" ");
         const run = await sh(`${cli} ${verb} ${args} --${flag} x`);
         expect(run.code).toBe(2);
         expect(run.stderr).toContain(`--${flag}`);
@@ -557,16 +571,51 @@ describe("unknown flags are rejected", () => {
 
     // import is a tenth empty-Set verb (round-1 cold-review finding, t-1112):
     // it sits directly below export in KNOWN_FLAGS, the same adjacency this
-    // block's ready/list/search case exists to catch, and was missed in the
-    // table above because it takes a file path instead of a task id. Same
-    // shape as the "caught before the file is read" case above, but with a
-    // flag real on update (--assignee) instead of a bogus one, so a widened
+    // block's ready/list case exists to catch, and was missed in the table
+    // above because it takes a file path instead of a task id. Same shape
+    // as the "caught before the file is read" case above, but with a flag
+    // real on update (--assignee) instead of a bogus one, so a widened
     // import Set is what this specifically witnesses.
     it("import --assignee (real on update) exits 2 and names the flag, without reading the file", async () => {
       const missing = join(dir, "does-not-exist-widening.json");
       const run = await sh(`${cli} import '${missing}' --assignee mark`);
       expect(run.code).toBe(2);
       expect(run.stderr).toContain("--assignee");
+    });
+
+    // Round 2 (cold-review): the `from` field above asserts each borrowed
+    // flag is real on its donor verb; nothing ran the donor to prove it. If
+    // a donor ever lost that flag, the matching case above would stay green
+    // for the wrong reason — indistinguishable from testing with --bogus,
+    // which defeats the whole point of borrowing a real flag. One case per
+    // distinct (from, flag) pair here executes the donor directly.
+    const donorCases: Record<string, () => Promise<Run>> = {
+      "create --spec-item-ref": () => sh(`${cli} create "donor probe" --spec-item-ref r`),
+      "create --type": () => sh(`${cli} create "donor probe" --type task`),
+      "create --parent": () => sh(`${cli} create "donor probe" --parent t-1`),
+      "create --legacy-ref": () => sh(`${cli} create "donor probe" --legacy-ref beads:1`),
+      "list --status": () => sh(`${cli} list --status open`),
+    };
+    for (const [label, run] of Object.entries(donorCases)) {
+      it(`donor premise: ${label} is accepted, not rejected as unknown`, async () => {
+        expect((await run()).stderr).not.toContain("unknown flag");
+      });
+    }
+
+    it("donor premise: close --reason is accepted, not rejected as unknown", async () => {
+      const createOut = join(dir, "donor-probe-close.json");
+      await sh(`${cli} create "donor probe close" > '${createOut}'`);
+      const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+      const run = await sh(`${cli} close ${id} --reason x`);
+      expect(run.stderr).not.toContain("unknown flag");
+    });
+
+    it("donor premise: update --title/--description/--priority/--assignee are accepted, not rejected as unknown", async () => {
+      const createOut = join(dir, "donor-probe-update.json");
+      await sh(`${cli} create "donor probe update" > '${createOut}'`);
+      const id = (JSON.parse(readFileSync(createOut, "utf8")).id) as string;
+      const run = await sh(`${cli} update ${id} --title x --description y --priority 1 --assignee mark`);
+      expect(run.stderr).not.toContain("unknown flag");
     });
   });
 });
