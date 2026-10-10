@@ -520,36 +520,54 @@ describe("unknown flags are rejected", () => {
 
   // t-1112: every --bogus/--force/--__proto__ case above proves a flagless
   // verb rejects a flag that belongs to NO verb. None of them would catch
-  // the Set for one of these nine verbs silently widening to include a flag
+  // the Set for one of these ten verbs silently widening to include a flag
   // that IS real elsewhere (e.g. KNOWN_FLAGS.ready gaining
   // new Set(["status"]) by a copy-paste from list/search) — the flag would
   // parse fine, checkKnownFlags would pass it, and buildCommand's switch
   // would drop it on the floor with zero test failure: the pre-t-893
   // silent-drop class, on the widening axis instead of the unknown-flag one.
   // Each case below uses a flag that is genuinely allowed on a DIFFERENT
-  // verb, so it only passes if this verb's own Set stays empty.
+  // verb (named as `from`, so the premise is checkable from this table
+  // rather than only by cross-referencing KNOWN_FLAGS), so the case only
+  // passes if this verb's own Set stays empty. `command` is derived from
+  // `args`/`flag` rather than duplicated, so the probed flag can't drift
+  // from the one actually sent.
   describe("flagless verbs reject a real flag borrowed from another verb (widening witness)", () => {
-    const cases: Record<string, { command: string; flag: string }> = {
-      claim: { command: "claim t-1 --spec-item-ref x", flag: "--spec-item-ref" },
-      unclaim: { command: "unclaim t-1 --reason x", flag: "--reason" },
-      reopen: { command: "reopen t-1 --title x", flag: "--title" },
-      delete: { command: "delete t-1 --description x", flag: "--description" },
-      comment: { command: `comment t-1 "hi" --priority 1`, flag: "--priority" },
-      show: { command: "show t-1 --type task", flag: "--type" },
+    const cases: Record<string, { args: string; flag: string; from: string }> = {
+      claim: { args: "t-1", flag: "spec-item-ref", from: "create" },
+      unclaim: { args: "t-1", flag: "reason", from: "close" },
+      reopen: { args: "t-1", flag: "title", from: "update" },
+      delete: { args: "t-1", flag: "description", from: "update" },
+      comment: { args: `t-1 "hi"`, flag: "priority", from: "update" },
+      show: { args: "t-1", flag: "type", from: "link/unlink" },
       // The ticket's own worked example (t-1112): ready sits right below
       // list/search in KNOWN_FLAGS, both of which carry --status — the
       // realistic copy-paste leak this whole case exists to catch.
-      ready: { command: "ready --status open", flag: "--status" },
-      report: { command: "report --parent t-1", flag: "--parent" },
-      export: { command: "export --legacy-ref x", flag: "--legacy-ref" },
+      ready: { args: "", flag: "status", from: "list/search" },
+      report: { args: "", flag: "parent", from: "create" },
+      export: { args: "", flag: "legacy-ref", from: "create" },
     };
-    for (const [verb, { command, flag }] of Object.entries(cases)) {
-      it(`${verb} ${flag} exits 2 and names the flag, even though ${flag} is real elsewhere`, async () => {
-        const run = await sh(`${cli} ${command}`);
+    for (const [verb, { args, flag, from }] of Object.entries(cases)) {
+      it(`${verb} --${flag} (real on ${from}) exits 2 and names the flag`, async () => {
+        const run = await sh(`${cli} ${verb} ${args} --${flag} x`);
         expect(run.code).toBe(2);
-        expect(run.stderr).toContain(flag);
+        expect(run.stderr).toContain(`--${flag}`);
       });
     }
+
+    // import is a tenth empty-Set verb (round-1 cold-review finding, t-1112):
+    // it sits directly below export in KNOWN_FLAGS, the same adjacency this
+    // block's ready/list/search case exists to catch, and was missed in the
+    // table above because it takes a file path instead of a task id. Same
+    // shape as the "caught before the file is read" case above, but with a
+    // flag real on update (--assignee) instead of a bogus one, so a widened
+    // import Set is what this specifically witnesses.
+    it("import --assignee (real on update) exits 2 and names the flag, without reading the file", async () => {
+      const missing = join(dir, "does-not-exist-widening.json");
+      const run = await sh(`${cli} import '${missing}' --assignee mark`);
+      expect(run.code).toBe(2);
+      expect(run.stderr).toContain("--assignee");
+    });
   });
 });
 
