@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, wunder]
+    runs-on: ubuntu-latest
     container: node:22-bookworm
 
     steps:
