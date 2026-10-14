@@ -8,7 +8,7 @@
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
 //                    [--legacy-ref r]
-//   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
+//   taskstore claim <id> | unclaim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a
 //   taskstore comment <id> "text"
 //   taskstore link <id> <dependsOn> --type blocks|parent-child
@@ -62,54 +62,28 @@ const actor = process.env.TASKSTORE_ACTOR ?? "art";
 const at = new Date().toISOString();
 const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"));
 
-// The flags each verb actually reads. A flag outside this set used to be
-// parsed into `flags` and then silently dropped — buildCommand only ever
-// looks up the keys it knows about, so a typo (--typ for --type) or a
-// stray flag (--bogus) vanished with no error, same failure class the
-// --type default used to be (see the link/unlink comment below): a
-// malformed command read back as a valid, narrower one. Unknown verbs are
-// already caught by the switch's default case; this catches unknown FLAGS
-// on a verb that otherwise matched.
-const KNOWN_FLAGS: Record<string, Set<string>> = {
-  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
-  claim: new Set(),
-  unclaim: new Set(),
-  close: new Set(["reason"]),
-  reopen: new Set(),
-  delete: new Set(),
-  update: new Set(["title", "description", "assignee", "priority"]),
-  comment: new Set(),
-  link: new Set(["type"]),
-  unlink: new Set(["type"]),
-  show: new Set(),
-  list: new Set(["status"]),
-  search: new Set(["status"]),
-  ready: new Set(),
-  report: new Set(),
-  export: new Set(),
-  import: new Set(),
-};
-
-function checkKnownFlags(): void {
-  // Object.hasOwn, not a bare KNOWN_FLAGS[verb]: a caller-controlled verb
-  // string can name an inherited Object.prototype member (toString,
-  // constructor, valueOf, hasOwnProperty, ...). Without this check `taskstore
-  // toString --x y` binds `allowed` to that inherited function, `allowed.has`
-  // throws an uncaught TypeError, and the command exits 1 with a stack trace
-  // instead of the switch default's clean "unknown verb" / exit 2.
-  const allowed = verb !== undefined && Object.hasOwn(KNOWN_FLAGS, verb) ? KNOWN_FLAGS[verb] : undefined;
-  if (!allowed) return; // unknown verb: the switch's default case owns this error
-  const unknown = Object.keys(flags).filter((k) => !allowed.has(k));
-  if (unknown.length > 0) {
-    const plural = unknown.length > 1 ? "s" : "";
-    console.error(`unknown flag${plural} for '${verb}': ${unknown.map((k) => `--${k}`).join(", ")}`);
-    process.exit(2);
-  }
+interface VerbEntry {
+  allowedFlags: Set<string>;
+  build: (positional: string[], flags: Record<string, string>) => Command;
 }
 
-function buildCommand(): Command {
-  switch (verb) {
-    case "create": {
+// One table drives both the flag allowlist and the command dispatch — the
+// flags a verb accepts live right next to the build() that reads them, so
+// a verb added here is automatically known to both checks. Before this, the
+// allowlist (KNOWN_FLAGS) and the dispatch (buildCommand's switch) were two
+// independently-maintained structures with nothing pinning one's key set to
+// the other's case set: a verb added to the switch but forgotten in
+// KNOWN_FLAGS would silently fall through to checkKnownFlags()'s "unknown
+// verb, not my problem" early return and ship with NO flag validation at
+// all — the exact pre-t-893 silent-drop bug class, just moved one level up.
+// `satisfies`, not an annotation: an annotation widens VERBS' type to
+// Record<string, VerbEntry>, which erases its own key set and defeats the
+// "one table pins both" property this comment claims — satisfies checks
+// the same shape without erasing it.
+const VERBS = {
+  create: {
+    allowedFlags: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
+    build: (positional, flags) => {
       const c: Command = { op: "create", title: positional[0], actor, at };
       if (flags.description !== undefined) c.description = flags.description;
       if (flags.type !== undefined) c.type = flags.type;
@@ -119,73 +93,137 @@ function buildCommand(): Command {
       if (flags["criterion-id"] !== undefined) c.criterionId = flags["criterion-id"];
       if (flags["legacy-ref"] !== undefined) c.legacyRef = flags["legacy-ref"];
       return c;
-    }
-    case "claim":
-      return { op: "claim", id: positional[0], actor, at };
-    case "unclaim":
-      return { op: "unclaim", id: positional[0], actor, at };
-    case "close": {
+    },
+  },
+  claim: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "claim", id: positional[0], actor, at }),
+  },
+  unclaim: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "unclaim", id: positional[0], actor, at }),
+  },
+  close: {
+    allowedFlags: new Set(["reason"]),
+    build: (positional, flags) => {
       const c: Command = { op: "close", id: positional[0], actor, at };
       if (flags.reason !== undefined) c.reason = flags.reason;
       return c;
-    }
-    case "reopen":
-      return { op: "reopen", id: positional[0], actor, at };
-    case "delete":
-      return { op: "delete", id: positional[0], actor, at };
-    case "update": {
+    },
+  },
+  reopen: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "reopen", id: positional[0], actor, at }),
+  },
+  delete: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "delete", id: positional[0], actor, at }),
+  },
+  update: {
+    allowedFlags: new Set(["title", "description", "assignee", "priority"]),
+    build: (positional, flags) => {
       const set: Record<string, unknown> = {};
       for (const k of ["title", "description", "assignee"]) if (flags[k] !== undefined) set[k] = flags[k];
       if (flags.priority !== undefined) set.priority = Number(flags.priority);
       return { op: "update", id: positional[0], set, actor, at };
-    }
-    case "comment":
-      return { op: "comment", id: positional[0], text: positional[1], actor, at };
-    // --type is passed through ABSENT when absent. It used to default to
-    // "blocks", which meant a missing flag silently built the edge that gates
-    // the ready queue; the core has always required the field (E_MISSING_FIELD)
-    // and the binding was overriding that refusal with the destructive choice.
-    case "link":
-      return { op: "link", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at };
-    case "unlink":
-      return { op: "unlink", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at };
-    case "show":
-      return { op: "show", id: positional[0] };
-    case "list": {
+    },
+  },
+  comment: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "comment", id: positional[0], text: positional[1], actor, at }),
+  },
+  // --type is passed through ABSENT when absent. It used to default to
+  // "blocks", which meant a missing flag silently built the edge that gates
+  // the ready queue; the core has always required the field (E_MISSING_FIELD)
+  // and the binding was overriding that refusal with the destructive choice.
+  link: {
+    allowedFlags: new Set(["type"]),
+    build: (positional, flags) => ({ op: "link", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at }),
+  },
+  unlink: {
+    allowedFlags: new Set(["type"]),
+    build: (positional, flags) => ({ op: "unlink", id: positional[0], dependsOn: positional[1], type: flags.type, actor, at }),
+  },
+  show: {
+    allowedFlags: new Set(),
+    build: (positional) => ({ op: "show", id: positional[0] }),
+  },
+  list: {
+    allowedFlags: new Set(["status"]),
+    build: (_positional, flags) => {
       const c: Command = { op: "list" };
       if (flags.status !== undefined) c.status = flags.status;
       return c;
-    }
-    case "search": {
+    },
+  },
+  search: {
+    allowedFlags: new Set(["status"]),
+    build: (positional, flags) => {
       const c: Command = { op: "search", q: positional[0] };
       if (flags.status !== undefined) c.status = flags.status;
       return c;
-    }
-    case "ready":
-      return { op: "ready" };
-    case "report":
-      return { op: "report" };
-    case "export":
-      return { op: "export" };
-    case "import": {
+    },
+  },
+  ready: {
+    allowedFlags: new Set(),
+    build: () => ({ op: "ready" }),
+  },
+  report: {
+    allowedFlags: new Set(),
+    build: () => ({ op: "report" }),
+  },
+  export: {
+    allowedFlags: new Set(),
+    build: () => ({ op: "export" }),
+  },
+  import: {
+    allowedFlags: new Set(),
+    build: (positional) => {
       const payload = JSON.parse(readFileSync(positional[0], "utf8")) as Record<string, unknown>;
       return { op: "import", tasks: payload.tasks, links: payload.links, actor, at };
-    }
-    default:
-      console.error(
-        "usage: taskstore <create|claim|unclaim|close|reopen|delete|update|comment|link|unlink|show|list|search|ready|report|export|import> ...",
-      );
-      // This exit() stays, unlike the one at the end of the file. It is the
-      // only way out of a branch that owes the caller a Command and has none
-      // — setting process.exitCode here would fall through and run the whole
-      // command path on `undefined`. It is also safe on the grounds the other
-      // one was not: nothing has been written to stdout yet, and the single
-      // short line above fits any pipe buffer, so there is no queued write to
-      // discard.
-      process.exit(2);
+    },
+  },
+} satisfies Record<string, VerbEntry>;
+
+// Object.hasOwn, not a bare VERBS[verb]: a caller-controlled verb string can
+// name an inherited Object.prototype member — a plain function (toString,
+// valueOf, hasOwnProperty), the special-formed constructor, or the __proto__
+// accessor, which resolves to Object.prototype itself. Without this check
+// `taskstore toString --x y` binds `entry` to one of those instead of
+// `undefined`; `entry.allowedFlags.has(...)` (checkKnownFlags, only reached
+// when a flag was passed) or `entry.build(...)` (buildCommand, otherwise)
+// then throws an uncaught TypeError, and the command exits 1 with a stack
+// trace instead of the clean "unknown verb" / exit 2 both callers below need.
+function verbEntry(): VerbEntry | undefined {
+  return verb !== undefined && Object.hasOwn(VERBS, verb) ? VERBS[verb as keyof typeof VERBS] : undefined;
+}
+
+function checkKnownFlags(): void {
+  const entry = verbEntry();
+  if (!entry) return; // unknown verb: buildCommand's own `if (!entry)` branch owns this error
+  const unknown = Object.keys(flags).filter((k) => !entry.allowedFlags.has(k));
+  if (unknown.length > 0) {
+    const plural = unknown.length > 1 ? "s" : "";
+    console.error(`unknown flag${plural} for '${verb}': ${unknown.map((k) => `--${k}`).join(", ")}`);
+    process.exit(2);
   }
 }
 
+function buildCommand(): Command {
+  const entry = verbEntry();
+  if (!entry) {
+    console.error(`usage: taskstore <${Object.keys(VERBS).join("|")}> ...`);
+    // This exit() stays, unlike the one at the end of the file. It is the
+    // only way out of a branch that owes the caller a Command and has none
+    // — setting process.exitCode here would fall through and run the whole
+    // command path on `undefined`. It is also safe on the grounds the other
+    // one was not: nothing has been written to stdout yet, and the single
+    // short line above fits any pipe buffer, so there is no queued write to
+    // discard.
+    process.exit(2);
+  }
+  return entry.build(positional, flags);
+}
 
 checkKnownFlags();
 const command = buildCommand();
