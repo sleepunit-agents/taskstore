@@ -2,6 +2,10 @@
   "name": "taskstore",
   "version": "0.4.0",
   "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
+  "bin": {
+    "taskstore": "dist/cli.js",
+    "loom-tasks": "dist/cli.js"
+  },
   "type": "module",
   "license": "AGPL-3.0-only",
   "exports": {
