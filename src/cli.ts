@@ -16,14 +16,15 @@
 //     exit 0 removed, 3 valid but no such edge, 1 rejected, 2 usage
 //   taskstore show <id> | list [--status s] | search <query> [--status s] | report | export
 //   taskstore import <payload.json>
+//   taskstore ui [page|act] --json   (loom's page; see src/loom-ui.ts)
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
-import type { Command } from "./core.js";
-import { uiSections } from "./loom-ui.js";
+import type { Command, Link, Task } from "./core.js";
+import { checkAct, manifest, page, type ReadyEntry, type UiView } from "./loom-ui.js";
 
 const argv = process.argv.slice(2);
 const verb = argv.shift();
@@ -188,24 +189,73 @@ function buildCommand(): Command {
 }
 
 
-// `ui`: taskstore's sections for loom's page (src/loom-ui.ts), when it runs as
-// loom's tasks piece (`loom tasks ui --json`). Reads only, and only a store
-// that already exists: loom-http calls this from its own working directory,
-// and opening the default relative path there would create an empty store.
+// `ui`: taskstore on loom's page (src/loom-ui.ts, loom docs/extensions.md
+// "The page", contract v2), when it runs as loom's tasks piece:
+//   ui [--json]        the manifest (tab, Home tile, the owner's asks)
+//   ui page --json     stdin {path, query} -> one page
+//   ui act --json      stdin {action, path, fields} -> {ok, message, page?}
+// Only a store that already exists: loom-http calls this from its own working
+// directory, and opening the default relative path there would create an
+// empty store. Pages are reads; the one action writes through the core's own
+// comment op, as the owner (TASKSTORE_OWNER; unset, there are no asks and a
+// comment from the page is posted as "loom-page").
 if (verb === "ui") {
+  const sub = positional[0] ?? "";
+  if (!["", "page", "act"].includes(sub)) {
+    console.error("usage: taskstore ui [page|act] --json");
+    process.exit(2);
+  }
   if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
     console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
     process.exit(1);
   }
+  const owner = process.env.TASKSTORE_OWNER?.trim() || "";
+  // Malformed stdin is a request loom can't have meant: null routes to Not
+  // found (page) or ok:false (act), never a crash.
+  const request = (): unknown => {
+    try {
+      return JSON.parse(readFileSync(0, "utf8"));
+    } catch {
+      return null;
+    }
+  };
   const uiStore = new SqliteStore(dbPath);
-  const ready = uiStore.run({ op: "ready" }) as { entries?: unknown[] };
-  const inProgress = uiStore.run({ op: "list", status: "in_progress" }) as { entries?: unknown[] };
+  const read = (): UiView => {
+    const all = uiStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
+    const ready = uiStore.run({ op: "ready" }) as { entries?: ReadyEntry[] };
+    return {
+      tasks: all.tasks ?? [], links: all.links ?? [], ready: ready.entries ?? [],
+      owner, now: new Date(), timeZone: process.env.TZ || undefined,
+    };
+  };
+  let out: unknown;
+  if (sub === "") out = manifest(read());
+  else if (sub === "page") out = page(read(), request());
+  else {
+    const req = request();
+    const check = checkAct(read(), req);
+    if (!check.ok) out = check;
+    else {
+      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at: new Date().toISOString() });
+      out = r.ok === true
+        ? { ok: true, message: "Comment added.", page: `task/${check.id}` }
+        : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
+    }
+  }
   uiStore.close();
-  // Synchronous: the rest of this file is the command path, and a few KB fit any pipe buffer.
-  writeSync(1, JSON.stringify(uiSections(
-    (ready.entries ?? []) as Parameters<typeof uiSections>[0],
-    (inProgress.entries ?? []) as Parameters<typeof uiSections>[1],
-  )) + "\n");
+  // Synchronous, then exit: the rest of this file is the command path. A
+  // task page can run to a few hundred KB, past a pipe's 64 KiB buffer, and
+  // stdout may be non-blocking (see the foot of this file), so write it all:
+  // keep going after a partial write and wait out EAGAIN, before exit.
+  const buf = Buffer.from(JSON.stringify(out) + "\n");
+  for (let off = 0; off < buf.length;) {
+    try {
+      off += writeSync(1, buf, off);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EAGAIN") throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
   process.exit(0);
 }
 
