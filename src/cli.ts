@@ -19,10 +19,11 @@
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Command } from "./core.js";
+import { uiSections } from "./loom-ui.js";
 
 const argv = process.argv.slice(2);
 const verb = argv.shift();
@@ -186,6 +187,27 @@ function buildCommand(): Command {
   }
 }
 
+
+// `ui`: taskstore's sections for loom's page (src/loom-ui.ts), when it runs as
+// loom's tasks piece (`loom tasks ui --json`). Reads only, and only a store
+// that already exists: loom-http calls this from its own working directory,
+// and opening the default relative path there would create an empty store.
+if (verb === "ui") {
+  if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
+    console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
+    process.exit(1);
+  }
+  const uiStore = new SqliteStore(dbPath);
+  const ready = uiStore.run({ op: "ready" }) as { entries?: unknown[] };
+  const inProgress = uiStore.run({ op: "list", status: "in_progress" }) as { entries?: unknown[] };
+  uiStore.close();
+  // Synchronous: the rest of this file is the command path, and a few KB fit any pipe buffer.
+  writeSync(1, JSON.stringify(uiSections(
+    (ready.entries ?? []) as Parameters<typeof uiSections>[0],
+    (inProgress.entries ?? []) as Parameters<typeof uiSections>[1],
+  )) + "\n");
+  process.exit(0);
+}
 
 checkKnownFlags();
 const command = buildCommand();
