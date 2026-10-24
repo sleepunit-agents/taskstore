@@ -242,7 +242,7 @@ describe("taskstore ui (the CLI verbs)", () => {
   });
 
   it("ui --json is the v2 manifest", () => {
-    const m = json(run(["ui", "--json"]));
+    const m = json(run(["ui", "--json"], "", { TASKSTORE_OWNER: "jonathan" }));
     expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready at p0–p1" } });
     expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Open" }]);
   });
@@ -252,6 +252,12 @@ describe("taskstore ui (the CLI verbs)", () => {
     expect(json(run(["ui", "page", "--json"], JSON.stringify({ path: "task/t-1" }))).title).toBe("doing");
     for (const input of ["", "not json", "[]", JSON.stringify({ path: "task/t-404" })])
       expect(json(run(["ui", "page", "--json"], input))).toEqual({ title: "Not found", sections: [] });
+  });
+
+  it("with no TASKSTORE_OWNER there are no asks, and a page comment is posted as loom-page", () => {
+    expect(json(run(["ui", "--json"])).asks).toEqual([]);
+    expect(json(run(["ui", "act", "--json"], JSON.stringify({ action: "comment", path: "", fields: { id: "t-2", text: "from the page" } }))).ok).toBe(true);
+    expect((JSON.parse(run(["show", "t-2"]).stdout).task as Task).comments.at(-1)).toMatchObject({ actor: "loom-page", text: "from the page" });
   });
 
   it("ui act --json adds the comment as the owner through the core", () => {

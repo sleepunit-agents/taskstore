@@ -22,6 +22,7 @@ export interface UiView {
   /** The core's `ready` window, already in its priority order. */
   ready: ReadyEntry[];
   /** Whose call an ask is: tasks assigned to this name (TASKSTORE_OWNER). */
+  /** Whose call an ask is (TASKSTORE_OWNER). Empty: nobody's, so no asks. */
   owner: string;
   now: Date;
   /** IANA zone for dates (TZ); undefined = the system default. */
@@ -81,7 +82,7 @@ function inProgress(v: UiView): Task[] {
 function ownersCall(v: UiView): Task[] {
   return v.tasks
     .map((t, i) => ({ t, i }))
-    .filter(({ t }) => t.status !== "closed" && t.assignee === v.owner)
+    .filter(({ t }) => v.owner !== "" && t.status !== "closed" && t.assignee === v.owner)
     .sort(byPriority)
     .map(({ t }) => t);
 }
@@ -263,7 +264,7 @@ export function taskPage(v: UiView, id: string): Page {
   for (const [label, val] of [["spec item", t.specItemRef], ["criterion", t.criterionId], ["legacy ref", t.legacyRef]] as const)
     if (val) kv.push({ label, value: clip(val) });
 
-  const yours = t.status !== "closed" && t.assignee === v.owner;
+  const yours = v.owner !== "" && t.status !== "closed" && t.assignee === v.owner;
   const main: Block[] = [
     { type: "link", text: "← Work", page: "" },
     ...(yours ? [{ type: "callout", title: "Your call", text: "This one is waiting on you. Add your decision as a comment below, and it's picked up from there.", tone: "warn" }] : []),
@@ -289,7 +290,7 @@ export function taskPage(v: UiView, id: string): Page {
       { id: "comment", blocks: [{
         type: "form", action: "comment", title: "Add a comment", submit: "Comment",
         hidden: { id: t.id },
-        fields: [{ name: "text", label: "Comment", kind: "textarea", required: true, hint: `Posted as ${v.owner}.` }],
+        fields: [{ name: "text", label: "Comment", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
       }] },
       { id: "facts", side: true, blocks: [{ type: "kv", items: kv }] },
     ],

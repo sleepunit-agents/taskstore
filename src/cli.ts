@@ -197,7 +197,8 @@ function buildCommand(): Command {
 // Only a store that already exists: loom-http calls this from its own working
 // directory, and opening the default relative path there would create an
 // empty store. Pages are reads; the one action writes through the core's own
-// comment op, as the owner (TASKSTORE_OWNER, default "jonathan").
+// comment op, as the owner (TASKSTORE_OWNER; unset, there are no asks and a
+// comment from the page is posted as "loom-page").
 if (verb === "ui") {
   const sub = positional[0] ?? "";
   if (!["", "page", "act"].includes(sub)) {
@@ -208,7 +209,7 @@ if (verb === "ui") {
     console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
     process.exit(1);
   }
-  const owner = process.env.TASKSTORE_OWNER || "jonathan";
+  const owner = process.env.TASKSTORE_OWNER?.trim() || "";
   // Malformed stdin is a request loom can't have meant: null routes to Not
   // found (page) or ok:false (act), never a crash.
   const request = (): unknown => {
@@ -235,7 +236,7 @@ if (verb === "ui") {
     const check = checkAct(read(), req);
     if (!check.ok) out = check;
     else {
-      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner, at: new Date().toISOString() });
+      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at: new Date().toISOString() });
       out = r.ok === true
         ? { ok: true, message: "Comment added.", page: `task/${check.id}` }
         : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
