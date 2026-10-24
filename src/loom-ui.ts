@@ -135,7 +135,7 @@ export function manifest(v: UiView) {
       text: clip(t.title, TITLE_MAX),
       meta: `${t.id} · p${t.priority}`,
       ...taskLink(t.id),
-      label: "Decide",
+      label: "Open",
     })),
   };
 }

@@ -59,8 +59,8 @@ describe("manifest", () => {
     expect(m.tab).toEqual({ label: "Tasks" });
     expect(m.tile).toEqual({ label: "Work", value: "2 in progress", detail: "1 ready at p0–p1", tone: "warn", page: "" });
     expect(m.asks).toEqual([
-      { text: "owner doing", meta: "t-4 · p2", page: "task/t-4", label: "Decide" },
-      { text: "pick the key recovery", meta: "t-3 · p3", page: "task/t-3", label: "Decide" },
+      { text: "owner doing", meta: "t-4 · p2", page: "task/t-4", label: "Open" },
+      { text: "pick the key recovery", meta: "t-3 · p3", page: "task/t-3", label: "Open" },
     ]);
   });
 
@@ -244,7 +244,7 @@ describe("taskstore ui (the CLI verbs)", () => {
   it("ui --json is the v2 manifest", () => {
     const m = json(run(["ui", "--json"]));
     expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready at p0–p1" } });
-    expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Decide" }]);
+    expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Open" }]);
   });
 
   it("ui page --json answers both pages, and Not found for junk", () => {
