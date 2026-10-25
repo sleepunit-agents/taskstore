@@ -17,6 +17,7 @@
 //   taskstore show <id> | list [--status s] | search <query> [--status s] | report | export
 //   taskstore import <payload.json>
 //   taskstore ui [page|act] --json   (loom's page; see src/loom-ui.ts)
+//   taskstore api --json             (loom's piece API; see src/loom-api.ts)
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
@@ -25,6 +26,8 @@ import { dirname, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
 import { checkAct, manifest, page, type ReadyEntry, type UiView } from "./loom-ui.js";
+import { answer, type ApiRequest } from "./loom-api.js";
+import { spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
 const verb = argv.shift();
@@ -189,6 +192,46 @@ function buildCommand(): Command {
 }
 
 
+// Synchronous, all of it: an answer can run to a few hundred KB, past a
+// pipe's 64 KiB buffer, and stdout may be non-blocking (see the foot of this
+// file), so keep going after a partial write and wait out EAGAIN.
+function writeAll(text: string): void {
+  const buf = Buffer.from(text);
+  for (let off = 0; off < buf.length;) {
+    try {
+      off += writeSync(1, buf, off);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EAGAIN") throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
+
+// `api`: taskstore over loom's piece API (src/loom-api.ts). The command runs
+// as this same CLI in a child process, with the caller's actor, against the
+// store that already exists (like `ui`, never a new one in loom-http's cwd).
+if (verb === "api") {
+  if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
+    console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
+    process.exit(1);
+  }
+  let request: ApiRequest | null = null;
+  try {
+    request = JSON.parse(readFileSync(0, "utf8")) as ApiRequest;
+  } catch {
+    request = null;
+  }
+  const out = answer(request, process.env, (args, who) => {
+    const r = spawnSync(process.execPath, [process.argv[1], ...args], {
+      env: { ...process.env, TASKSTORE_DB: dbPath, TASKSTORE_ACTOR: who },
+      input: "", encoding: "utf8", timeout: 12_000, maxBuffer: 32 * 1024 * 1024,
+    });
+    return { exit: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.error ? String(r.error) : (r.stderr ?? "") };
+  });
+  writeAll(JSON.stringify(out) + "\n");
+  process.exit(0);
+}
+
 // `ui`: taskstore on loom's page (src/loom-ui.ts, loom docs/extensions.md
 // "The page", contract v2), when it runs as loom's tasks piece:
 //   ui [--json]        the manifest (tab, Home tile, the owner's asks)
@@ -243,19 +286,8 @@ if (verb === "ui") {
     }
   }
   uiStore.close();
-  // Synchronous, then exit: the rest of this file is the command path. A
-  // task page can run to a few hundred KB, past a pipe's 64 KiB buffer, and
-  // stdout may be non-blocking (see the foot of this file), so write it all:
-  // keep going after a partial write and wait out EAGAIN, before exit.
-  const buf = Buffer.from(JSON.stringify(out) + "\n");
-  for (let off = 0; off < buf.length;) {
-    try {
-      off += writeSync(1, buf, off);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EAGAIN") throw err;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-    }
-  }
+  // Written in full, then exit: the rest of this file is the command path.
+  writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
 }
 
