@@ -24,4 +24,11 @@ It reads `TASKSTORE_DB` (which must already exist), `TASKSTORE_OWNER` (whose
 call an ask is and who a comment from the page is posted as; unset, there are
 no asks and comments are posted as `loom-page`) and `TZ` for dates.
 
+Over loom's piece API (`POST /api/tasks/run`, body `{"argv": ["ready"]}`) a body
+that isn't on loom's machine, such as a house, runs any CLI command against the
+one store and gets back `{exit, stdout, stderr}`: the same JSON and exit codes
+as locally (`src/loom-api.ts`). It runs as loom's resolved caller: the owner (as
+`TASKSTORE_OWNER`), or an agent named in `TASKSTORE_AGENTS`, as that agent.
+Nobody else gets in, and `import` (which reads a file on loom's machine) stays local.
+
 Born in felag ceremony 2 (art-ubo.6, 2026-06-12).
