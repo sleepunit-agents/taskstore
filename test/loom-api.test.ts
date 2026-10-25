@@ -3,7 +3,7 @@
 // loom-http runs it: `taskstore api --json` with the request on stdin.
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,8 @@ const out = (b: Record<string, unknown>) =>
   JSON.parse(typeof b.stdout === "string" ? b.stdout : gunzipSync(Buffer.from(String(b.stdoutGz), "base64")).toString());
 
 beforeAll(() => {
+  // The built CLI is what loom-http runs; build it, as cli-binding does.
+  execFileSync("npm", ["run", "build"], { cwd: join(__dirname, ".."), stdio: "pipe" });
   db = join(mkdtempSync(join(tmpdir(), "ts-api-")), "store.db");
   const r = spawnSync(process.execPath, [cli, "create", "seed"], { env: { PATH: process.env.PATH ?? "", TASKSTORE_DB: db } });
   expect(r.status).toBe(0);
