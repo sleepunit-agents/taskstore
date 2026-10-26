@@ -31,7 +31,7 @@ export interface UiView {
 
 type Block = Record<string, unknown> & { type: string };
 interface Section { id: string; title?: string; tone?: string; side?: boolean; blocks: Block[] }
-export interface Page { title: string; intro?: string; sections: Section[] }
+export interface Page { title: string; intro?: string; sections: Section[]; /** loom draws it as the "+" beside the title. */ add?: { page: string; label: string } }
 
 export const NOT_FOUND: Page = { title: "Not found", sections: [] };
 
@@ -144,6 +144,7 @@ export function page(v: UiView, req: unknown): Page {
   if (!isObj(req) || typeof req.path !== "string" || !pathOk(req.path)) return NOT_FOUND;
   const query = isObj(req.query) ? req.query : {};
   if (req.path === "") return workPage(v, query);
+  if (req.path === "new") return newTaskPage(v);
   const m = /^task\/([^/]+)$/.exec(req.path);
   if (m) return taskPage(v, m[1]);
   return NOT_FOUND;
@@ -221,6 +222,7 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
 
   return {
     title: "Tasks",
+    add: { page: "new", label: "New task" },
     intro: show === "blocked" ? "Waiting on something else first." : show === "done" ? "What got finished lately." : "What's waiting on you, what's moving, and what's ready next.",
     sections,
   };
@@ -292,9 +294,28 @@ export function taskPage(v: UiView, id: string): Page {
   };
 }
 
+/** The board's "+": a task's title, how urgent, whose, and a note. */
+export function newTaskPage(v: UiView): Page {
+  return {
+    title: "New task",
+    sections: [{ id: "new", blocks: [{
+      type: "form", action: "create", submit: "Create task",
+      fields: [
+        { name: "title", label: "Title", kind: "text", required: true, hint: `${TITLE_MAX} characters at most.` },
+        { name: "priority", label: "Priority", kind: "choice", value: "2",
+          options: [{ value: "1", label: "p1" }, { value: "2", label: "p2" }, { value: "3", label: "p3" }, { value: "4", label: "p4" }] },
+        ...(v.owner ? [{ name: "mine", label: "Whose", kind: "choice", value: "",
+          options: [{ value: "", label: "The agents'" }, { value: "1", label: "Mine" }] }] : []),
+        { name: "description", label: "Notes", kind: "textarea" },
+      ],
+    }] }],
+  };
+}
+
 // ------------------------------------------------------------- actions
 
 export type ActCheck =
+  | { ok: true; action: "create"; title: string; priority: number; description?: string; mine: boolean }
   | { ok: true; action: "comment"; id: string; text: string }
   | { ok: true; action: "close" | "reopen"; id: string }
   | { ok: false; message: string };
@@ -302,6 +323,15 @@ export type ActCheck =
 /** Validate a `ui act` request: comment, close (Mark done), reopen (its Undo). loom passes fields through unchecked. */
 export function checkAct(v: UiView, req: unknown): ActCheck {
   if (!isObj(req)) return { ok: false, message: "That request couldn't be read." };
+  if (req.action === "create") {
+    const f = isObj(req.fields) ? req.fields : {};
+    const title = typeof f.title === "string" ? f.title.trim() : "";
+    if (!title) return { ok: false, message: "A task needs a title." };
+    if (title.length > TITLE_MAX) return { ok: false, message: `The title is ${title.length} characters; the limit is ${TITLE_MAX}.` };
+    const priority = typeof f.priority === "string" && PRIORITIES.includes(f.priority) ? Number(f.priority) : 2;
+    const description = typeof f.description === "string" && f.description.trim() ? f.description.trim().slice(0, COMMENT_MAX) : undefined;
+    return { ok: true, action: "create", title, priority, ...(description ? { description } : {}), mine: f.mine === "1" && v.owner !== "" };
+  }
   if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen") return { ok: false, message: "taskstore doesn't know that action." };
   const fields = isObj(req.fields) ? req.fields : {};
   const id = fields.id;

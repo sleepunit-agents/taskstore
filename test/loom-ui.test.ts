@@ -280,6 +280,18 @@ describe("taskstore ui (the CLI verbs)", () => {
     expect((JSON.parse(run(["show", "t-1"]).stdout).task as Task).status).toBe("open");
   });
 
+  it("the board's +: Tasks links New task, whose form files one through the core, the owner's when asked", () => {
+    expect(json(run(["ui", "page", "--json"], JSON.stringify({ path: "", query: {} }))).add).toEqual({ page: "new", label: "New task" });
+    const form = json(run(["ui", "page", "--json"], JSON.stringify({ path: "new" }), { TASKSTORE_OWNER: "jonathan" })).sections[0].blocks[0];
+    expect(form.action).toBe("create");
+    expect(form.fields.map((f: { name: string }) => f.name)).toEqual(["title", "priority", "mine", "description"]);
+    const r = json(run(["ui", "act", "--json"], JSON.stringify({ action: "create", path: "new", fields: { title: "  Water the kiln  ", priority: "1", mine: "1", description: "Cone 6." } }), { TASKSTORE_OWNER: "jonathan" }));
+    expect(r).toMatchObject({ ok: true, message: expect.stringMatching(/^t-\d+ is filed\.$/) });
+    const id = String(r.page).replace("task/", "");
+    expect(JSON.parse(run(["show", id]).stdout).task).toMatchObject({ title: "Water the kiln", priority: 1, assignee: "jonathan", description: "Cone 6.", createdBy: "jonathan" });
+    expect(json(run(["ui", "act", "--json"], JSON.stringify({ action: "create", fields: { title: "   " } }))).ok).toBe(false);
+  });
+
   it("ui act --json refuses with ok:false and exit 0, writing nothing", () => {
     const before = run(["show", "t-1"]).stdout;
     for (const input of ["", "{", JSON.stringify({ action: "delete", fields: { id: "t-1" } }),
