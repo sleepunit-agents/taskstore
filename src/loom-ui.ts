@@ -131,6 +131,8 @@ export function manifest(v: UiView) {
       meta: `${t.id} · p${t.priority}`,
       ...taskLink(t.id),
       label: "Open",
+      // Its age on the card: since it was started, else since it was filed.
+      at: t.startedAt ?? t.createdAt,
     })),
   };
 }
