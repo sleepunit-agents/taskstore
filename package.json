@@ -12,6 +12,7 @@
     ".": "./dist/index.js"
   },
   "scripts": {
+    "prepare": "tsc",
     "build": "tsc",
     "test": "vitest run",
     "build-spec": "node scripts/build-spec.mjs",
@@ -26,6 +27,30 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^12.11.1"
+  },
+  "loom": {
+    "role": "tasks",
+    "label": "Tasks",
+    "description": "A work store: tasks, links, comments and the ready queue (spec/taskstore-core).",
+    "settings": [
+      {
+        "name": "TASKSTORE_DB",
+        "label": "Store file",
+        "hint": "the SQLite file the store lives in",
+        "default": "${LOOM_PIECE_HOME}/data/store.db"
+      },
+      {
+        "name": "TASKSTORE_OWNER",
+        "label": "Whose call a task is",
+        "hint": "the person's slug; page comments are posted as them",
+        "required": true
+      },
+      {
+        "name": "TASKSTORE_AGENTS",
+        "label": "Agents that may use the store over loom's API",
+        "hint": "comma-separated agent names"
+      }
+    ]
   }
 }
