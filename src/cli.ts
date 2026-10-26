@@ -278,11 +278,19 @@ if (verb === "ui") {
     const req = request();
     const check = checkAct(read(), req);
     if (!check.ok) out = check;
-    else {
+    else if (check.action === "comment") {
       const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at: new Date().toISOString() });
       out = r.ok === true
         ? { ok: true, message: "Comment added.", page: `task/${check.id}` }
         : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
+    } else {
+      // Mark done, and its Undo (loom's ActResult.undo): reopen.
+      const r = uiStore.run({ op: check.action, id: check.id, actor: owner || "loom-page", at: new Date().toISOString() } as Command);
+      out = r.ok !== true
+        ? { ok: false, message: `That didn't take (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` }
+        : check.action === "close"
+          ? { ok: true, message: `${check.id} is done.`, page: `task/${check.id}`, undo: { action: "reopen", fields: { id: check.id } } }
+          : { ok: true, message: `${check.id} is open again.`, page: `task/${check.id}` };
     }
   }
   uiStore.close();

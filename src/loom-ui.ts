@@ -40,6 +40,7 @@ const LIST_SHOWN = 50;
 const HISTORY_SHOWN = 100;
 const MAX_STR = 2000; // the contract's per-string limit
 const TITLE_MAX = 300;
+const PROSE_MAX = 20000; // the contract's prose limit
 export const COMMENT_MAX = 10000;
 
 // ------------------------------------------------------------- helpers
@@ -48,13 +49,6 @@ function clip(s: string, n = MAX_STR): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
-/** Split long text into contract-sized strings (a text block per chunk). */
-function chunks(s: string, max: number): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < s.length && out.length < max; i += MAX_STR) out.push(s.slice(i, i + MAX_STR));
-  if (out.length * MAX_STR < s.length) out[out.length - 1] = out[out.length - 1].slice(0, MAX_STR - 1) + "…";
-  return out;
-}
 
 // The contract's path grammar. A task id that doesn't fit it (an imported id
 // with capitals, say) gets no link rather than a link that would make loom
@@ -159,76 +153,73 @@ function shownOf(shown: number, total: number): Block {
   return { type: "text", text: `Shown ${shown} of ${total}.`, tone: "muted" };
 }
 
+const SHOWS = ["", "blocked", "done"];
+const DONE_DAYS = 7;
+const AGENT_ID = /^[a-z][a-z0-9-]{0,39}$/;
+/** An assignee that looks like an agent id: loom draws its mark (an unknown id draws nothing). */
+const agentOf = (who?: string) => (who && AGENT_ID.test(who) ? { agent: who } : {});
+
+/**
+ * Work, per the board: Open · Blocked · Done counts, the same three as pills,
+ * then the rows — the owner's own first (waiting on you), then in progress,
+ * then ready in priority order. `priority` still narrows, as before.
+ */
 export function workPage(v: UiView, query: Record<string, unknown>): Page {
-  // The filter is priority, a real field on every task. "" (or anything
-  // that isn't 0-4) means all; with no filter the ready list is p0-p1.
+  const show = typeof query.show === "string" && SHOWS.includes(query.show) ? query.show : "";
   const pq = typeof query.priority === "string" && PRIORITIES.includes(query.priority) ? Number(query.priority) : undefined;
-  const allDoing = inProgress(v);
-  const doing = pq === undefined ? allDoing : allDoing.filter((t) => t.priority === pq);
-  const readyHere = pq === undefined ? urgent(v) : v.ready.filter((e) => e.priority === pq);
   const at = pq === undefined ? "" : ` at p${pq}`;
-  const assignee = new Map(v.tasks.map((t) => [t.id, t.assignee]));
-
-  const sections: Section[] = [];
+  const byP = (t: Task) => pq === undefined || t.priority === pq;
+  const open = v.tasks.filter((t) => t.status !== "closed");
+  const blocked = open.filter((t) => t.status === "open" && isBlocked(v, t.id));
+  const since = v.now.getTime() - DONE_DAYS * 86_400_000;
+  const done = v.tasks.filter((t) => t.status === "closed" && t.closedAt && Date.parse(t.closedAt) >= since)
+    .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
   const mine = ownersCall(v);
-  if (mine.length) {
-    const shown = mine.slice(0, LIST_SHOWN);
-    sections.push({
-      id: "yours", title: "Your call", tone: "warn",
-      blocks: [
-        { type: "list", items: shown.map((t) => ({ text: clip(t.title, TITLE_MAX), meta: `${t.id} · p${t.priority}`, ...taskLink(t.id) })) },
-        ...(mine.length > shown.length ? [shownOf(shown.length, mine.length)] : []),
-      ],
-    });
-  }
 
-  sections.push({
+  const sections: Section[] = [{
     id: "summary",
     blocks: [
       { type: "stats", items: [
-        { label: "In progress", value: String(allDoing.length) },
-        { label: "Ready", value: String(v.ready.length) },
-        { label: "Ready at p0–p1", value: String(urgent(v).length), ...(urgent(v).length ? { tone: "warn" } : {}) },
+        { label: "Open", value: String(open.length - blocked.length), page: "" },
+        { label: "Blocked", value: String(blocked.length), ...(blocked.length ? { tone: "warn" } : {}), page: "?show=blocked" },
+        { label: `Done · ${DONE_DAYS}d`, value: String(done.length), page: "?show=done" },
       ] },
-      { type: "filters", param: "priority", options: [
-        { value: "", label: "All" },
-        ...PRIORITIES.map((p) => ({ value: p, label: `p${p}` })),
-      ] },
+      { type: "filters", param: "show", options: [{ value: "", label: "Open" }, { value: "blocked", label: "Blocked" }, { value: "done", label: "Done" }] },
     ],
+  }];
+
+  const row = (t: Task, meta: string, tone?: string) => ({
+    text: clip(t.title, TITLE_MAX), meta: clip(`${meta} · ${t.id} · p${t.priority}`), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
+  });
+  const list = (id: string, title: string | undefined, items: Array<Record<string, unknown>>, empty: string, total: number) => sections.push({
+    id, ...(title ? { title } : {}),
+    blocks: items.length ? [{ type: "list", items }, ...(total > items.length ? [shownOf(items.length, total)] : [])] : [{ type: "text", text: empty, tone: "muted" }],
   });
 
-  const doingShown = doing.slice(0, LIST_SHOWN);
-  sections.push({
-    id: "in-progress", title: `In progress${at}`,
-    blocks: doing.length
-      ? [
-        { type: "list", items: doingShown.map((t) => ({
-          text: clip(t.title, TITLE_MAX),
-          meta: `${t.id} · p${t.priority}${t.assignee ? ` · ${t.assignee}` : ""}`,
-          ...taskLink(t.id),
-        })) },
-        shownOf(doingShown.length, doing.length),
-      ]
-      : [{ type: "text", text: `Nothing in progress${at}.`, tone: "muted" }],
-  });
-
-  const readyShown = readyHere.slice(0, LIST_SHOWN);
-  sections.push({
-    id: "ready", title: pq === undefined ? "Ready at p0–p1" : `Ready${at}`,
-    blocks: readyHere.length
-      ? [
-        { type: "list", items: readyShown.map((e) => {
-          const who = assignee.get(e.id);
-          return { text: clip(e.title, TITLE_MAX), meta: `${e.id} · p${e.priority}${who ? ` · ${who}` : ""}`, ...taskLink(e.id) };
-        }) },
-        shownOf(readyShown.length, readyHere.length),
-      ]
-      : [{ type: "text", text: `Nothing ready${pq === undefined ? " at p0–p1" : at}.`, tone: "muted" }],
-  });
+  if (show === "blocked") {
+    const rows = blocked.filter(byP).slice(0, LIST_SHOWN).map((t) => {
+      const on = v.links.filter((l) => l.type === "blocks" && l.id === t.id && v.tasks.find((x) => x.id === l.dependsOn)?.status !== "closed").map((l) => l.dependsOn);
+      return row(t, `blocked by ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, "muted");
+    });
+    list("blocked", `Blocked${at}`, rows, `Nothing blocked${at}.`, blocked.filter(byP).length);
+  } else if (show === "done") {
+    const rows = done.filter(byP).slice(0, LIST_SHOWN).map((t) => row(t, `done ${humanDate(t.closedAt, v.now, v.timeZone)}`, "ok"));
+    list("done", `Done in the last ${DONE_DAYS} days${at}`, rows, `Nothing done in the last ${DONE_DAYS} days${at}.`, done.filter(byP).length);
+  } else {
+    const seen = new Set<string>();
+    const take = (t: Task) => (seen.has(t.id) ? false : (seen.add(t.id), true));
+    const yours = mine.filter(byP).filter(take).map((t) => row(t, "waiting on you", "warn"));
+    const doing = inProgress(v).filter(byP).filter(take).map((t) => row(t, `working on it${t.assignee ? ` · ${t.assignee}` : ""}`));
+    const tasks = new Map(v.tasks.map((t) => [t.id, t]));
+    const ready = v.ready.filter((e) => pq === undefined || e.priority === pq).map((e) => tasks.get(e.id)).filter((t): t is Task => !!t).filter(take)
+      .map((t) => row(t, "ready"));
+    const all = [...yours, ...doing, ...ready];
+    list("open", pq === undefined ? undefined : `Open${at}`, all.slice(0, LIST_SHOWN), `Nothing open${at}.`, all.length);
+  }
 
   return {
-    title: "Work",
-    intro: pq === undefined ? "What's moving, and what's ready to pick up next." : `Only p${pq} work.`,
+    title: "Tasks",
+    intro: show === "blocked" ? "Waiting on something else first." : show === "done" ? "What got finished lately." : "What's waiting on you, what's moving, and what's ready next.",
     sections,
   };
 }
@@ -265,18 +256,20 @@ export function taskPage(v: UiView, id: string): Page {
     if (val) kv.push({ label, value: clip(val) });
 
   const yours = v.owner !== "" && t.status !== "closed" && t.assignee === v.owner;
+  // The board's Task: the ask (if it's yours), the description as written
+  // (markdown, a prose block), then Mark done — or Reopen once it's closed.
   const main: Block[] = [
-    { type: "link", text: "← Work", page: "" },
-    ...(yours ? [{ type: "callout", title: "Your call", text: "This one is waiting on you. Add your decision as a comment below, and it's picked up from there.", tone: "warn" }] : []),
-    ...(t.description
-      ? chunks(t.description, 17).map((c) => ({ type: "text", text: c }))
-      : [{ type: "text", text: "No description.", tone: "muted" }]),
+    ...(yours ? [{ type: "callout", title: "Waiting on you", text: "Your answer goes in the reply below; it's picked up from there.", tone: "warn" }] : []),
+    t.description ? { type: "prose", text: t.description.slice(0, PROSE_MAX) } : { type: "text", text: "No description.", tone: "muted" },
+    { type: "buttons", items: [t.status === "closed"
+      ? { action: "reopen", label: "Reopen", fields: { id: t.id } }
+      : { action: "close", label: "Mark done", tone: "primary", fields: { id: t.id } }] },
   ];
 
   const comments = t.comments.slice(-HISTORY_SHOWN);
   const history: Block[] = comments.length
     ? [
-      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor} · ${date(c.at)}`) })) },
+      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor} · ${date(c.at)}`), ...agentOf(c.actor) })) },
       ...(t.comments.length > comments.length ? [shownOf(comments.length, t.comments.length)] : []),
     ]
     : [{ type: "text", text: "No comments yet.", tone: "muted" }];
@@ -286,11 +279,11 @@ export function taskPage(v: UiView, id: string): Page {
     intro: `${t.id} · ${status} · p${t.priority}`,
     sections: [
       { id: "task", blocks: main },
-      { id: "history", title: "History", blocks: history },
-      { id: "comment", blocks: [{
-        type: "form", action: "comment", title: "Add a comment", submit: "Comment",
+      { id: "comments", title: "Comments", blocks: history },
+      { id: "reply", blocks: [{
+        type: "form", action: "comment", title: "Reply", submit: "Send",
         hidden: { id: t.id },
-        fields: [{ name: "text", label: "Comment", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
+        fields: [{ name: "text", label: yours ? "Your call" : "Reply", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
       }] },
       { id: "facts", side: true, blocks: [{ type: "kv", items: kv }] },
     ],
@@ -300,19 +293,23 @@ export function taskPage(v: UiView, id: string): Page {
 // ------------------------------------------------------------- actions
 
 export type ActCheck =
-  | { ok: true; id: string; text: string }
+  | { ok: true; action: "comment"; id: string; text: string }
+  | { ok: true; action: "close" | "reopen"; id: string }
   | { ok: false; message: string };
 
-/** Validate a `ui act` request. Only "comment" exists; loom passes fields through unchecked. */
+/** Validate a `ui act` request: comment, close (Mark done), reopen (its Undo). loom passes fields through unchecked. */
 export function checkAct(v: UiView, req: unknown): ActCheck {
   if (!isObj(req)) return { ok: false, message: "That request couldn't be read." };
-  if (req.action !== "comment") return { ok: false, message: "taskstore doesn't know that action." };
+  if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen") return { ok: false, message: "taskstore doesn't know that action." };
   const fields = isObj(req.fields) ? req.fields : {};
   const id = fields.id;
-  if (typeof id !== "string" || !v.tasks.some((t) => t.id === id)) return { ok: false, message: "That task doesn't exist." };
+  const task = typeof id === "string" ? v.tasks.find((t) => t.id === id) : undefined;
+  if (typeof id !== "string" || !task) return { ok: false, message: "That task doesn't exist." };
+  if (req.action === "close") return task.status === "closed" ? { ok: false, message: "It's already done." } : { ok: true, action: "close", id };
+  if (req.action === "reopen") return task.status !== "closed" ? { ok: false, message: "It isn't closed." } : { ok: true, action: "reopen", id };
   const text = typeof fields.text === "string" ? fields.text.trim() : "";
   if (!text) return { ok: false, message: "The comment is empty." };
   if (text.length > COMMENT_MAX)
     return { ok: false, message: `The comment is ${text.length} characters; the limit is ${COMMENT_MAX}.` };
-  return { ok: true, id, text };
+  return { ok: true, action: "comment", id, text };
 }
