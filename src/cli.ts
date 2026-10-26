@@ -278,7 +278,15 @@ if (verb === "ui") {
     const req = request();
     const check = checkAct(read(), req);
     if (!check.ok) out = check;
-    else if (check.action === "comment") {
+    else if (check.action === "create") {
+      const at = new Date().toISOString();
+      const r = uiStore.run({ op: "create", title: check.title, priority: check.priority, ...(check.description ? { description: check.description } : {}), actor: owner || "loom-page", at });
+      const id = r.ok === true ? String((r as { id?: unknown }).id ?? "") : "";
+      if (id && check.mine) uiStore.run({ op: "update", id, set: { assignee: owner }, actor: owner, at } as Command);
+      out = id
+        ? { ok: true, message: `${id} is filed.`, page: `task/${id}` }
+        : { ok: false, message: `It wasn't filed (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
+    } else if (check.action === "comment") {
       const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at: new Date().toISOString() });
       out = r.ok === true
         ? { ok: true, message: "Comment added.", page: `task/${check.id}` }
