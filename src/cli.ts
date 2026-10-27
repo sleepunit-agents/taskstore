@@ -27,7 +27,7 @@ import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
 import { checkAct, manifest, page, type ReadyEntry, type UiView } from "./loom-ui.js";
 import { answer, type ApiRequest } from "./loom-api.js";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
 const verb = argv.shift();
@@ -287,9 +287,18 @@ if (verb === "ui") {
         ? { ok: true, message: `${id} is filed.`, page: `task/${id}` }
         : { ok: false, message: `It wasn't filed (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
     } else if (check.action === "comment") {
-      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at: new Date().toISOString() });
+      const at = new Date().toISOString();
+      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner || "loom-page", at });
+      let message = "Comment added.";
+      if (r.ok === true && owner) {
+        // The owner answered: the task goes back to the agents (it leaves Your call), and one is woken to act on it.
+        const agent = (process.env.TASKSTORE_AGENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean)[0];
+        const task = (uiStore.run({ op: "show", id: check.id }) as { task?: { assignee?: string } }).task;
+        if (agent && task?.assignee === owner) uiStore.run({ op: "update", id: check.id, set: { assignee: agent }, actor: owner, at } as Command);
+        if (onOwnerComment(check.id)) message = `Comment added. ${agent ? agent[0].toUpperCase() + agent.slice(1) : "An agent"} picks it up.`;
+      }
       out = r.ok === true
-        ? { ok: true, message: "Comment added.", page: `task/${check.id}` }
+        ? { ok: true, message, page: `task/${check.id}` }
         : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
     } else {
       // Mark done, and its Undo (loom's ActResult.undo): reopen.
@@ -305,6 +314,26 @@ if (verb === "ui") {
   // Written in full, then exit: the rest of this file is the command path.
   writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
+}
+
+/**
+ * TASKSTORE_ON_OWNER_COMMENT: a command as a JSON array of strings, "{id}"
+ * standing for the task, run (detached, no shell) when the owner comments from
+ * loom's page: a wake for the agent, say. True when it was started.
+ */
+function onOwnerComment(id: string): boolean {
+  const raw = process.env.TASKSTORE_ON_OWNER_COMMENT?.trim();
+  if (!raw) return false;
+  let argv: unknown;
+  try { argv = JSON.parse(raw); } catch { return false; }
+  if (!Array.isArray(argv) || !argv.length || !argv.every((a) => typeof a === "string")) return false;
+  const args = (argv as string[]).map((a) => a.split("{id}").join(id));
+  try {
+    const child = spawn(args[0], args.slice(1), { detached: true, stdio: "ignore" });
+    child.on("error", () => {});
+    child.unref();
+    return true;
+  } catch { return false; }
 }
 
 checkKnownFlags();

@@ -2,7 +2,7 @@
 // "The page"): `ui --json` manifest, `ui page --json`, `ui act --json`.
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply, emptyState, type Command, type StoreState, type Task } from "../src/core.js";
@@ -290,6 +290,24 @@ describe("taskstore ui (the CLI verbs)", () => {
     const id = String(r.page).replace("task/", "");
     expect(JSON.parse(run(["show", id]).stdout).task).toMatchObject({ title: "Water the kiln", priority: 1, assignee: "jonathan", description: "Cone 6.", createdBy: "jonathan" });
     expect(json(run(["ui", "act", "--json"], JSON.stringify({ action: "create", fields: { title: "   " } }))).ok).toBe(false);
+  });
+
+  it("the owner's comment from the page: their initial on the row, the task back to the agent, and the hook run", async () => {
+    expect(run(["update", "t-2", "--assignee", "jonathan"]).status).toBe(0);
+    const mark = join(mkdtempSync(join(tmpdir(), "taskstore-hook-")), "woke");
+    const env = { TASKSTORE_OWNER: "jonathan", TASKSTORE_AGENTS: "art,mark", TASKSTORE_ON_OWNER_COMMENT: JSON.stringify(["sh", "-c", `echo {id} > ${mark}`]) };
+    const r = json(run(["ui", "act", "--json"], JSON.stringify({ action: "comment", path: "task/t-2", fields: { id: "t-2", text: "close it" } }), env));
+    expect(r).toEqual({ ok: true, message: "Comment added. Art picks it up.", page: "task/t-2" });
+    expect((JSON.parse(run(["show", "t-2"]).stdout).task as Task).assignee).toBe("art");
+    for (let i = 0; i < 50 && !existsSync(mark); i++) await new Promise((res) => setTimeout(res, 20));
+    expect(readFileSync(mark, "utf8").trim()).toBe("t-2");
+    const p = json(run(["ui", "page", "--json"], JSON.stringify({ path: "task/t-2" }), { TASKSTORE_OWNER: "jonathan" }));
+    const last = p.sections.find((x: { id: string }) => x.id === "comments").blocks[0].items.at(-1);
+    expect(last).toMatchObject({ text: "close it", avatar: "J" });
+    expect(last.agent).toBeUndefined();
+    // No hook set: the comment is added and the task still goes back, but nothing claims to pick it up.
+    expect(run(["update", "t-2", "--assignee", "jonathan"]).status).toBe(0);
+    expect(json(run(["ui", "act", "--json"], JSON.stringify({ action: "comment", fields: { id: "t-2", text: "x" } }), { TASKSTORE_OWNER: "jonathan", TASKSTORE_AGENTS: "art" })).message).toBe("Comment added.");
   });
 
   it("ui act --json refuses with ok:false and exit 0, writing nothing", () => {

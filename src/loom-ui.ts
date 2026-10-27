@@ -161,6 +161,8 @@ const DONE_DAYS = 7;
 const AGENT_ID = /^[a-z][a-z0-9-]{0,39}$/;
 /** An assignee that looks like an agent id: loom draws its mark (an unknown id draws nothing). */
 const agentOf = (who?: string) => (who && AGENT_ID.test(who) ? { agent: who } : {});
+/** A comment's lead: the owner's initial in a circle (a person, not an agent), else the agent's mark. */
+const whoOf = (v: UiView, who: string) => (v.owner && who === v.owner ? { avatar: who.slice(0, 1).toUpperCase() } : agentOf(who));
 
 /**
  * Work, per the board: Open · Blocked · Done counts, the same three as pills,
@@ -273,7 +275,7 @@ export function taskPage(v: UiView, id: string): Page {
   const comments = t.comments.slice(-HISTORY_SHOWN);
   const history: Block[] = comments.length
     ? [
-      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor} · ${date(c.at)}`), ...agentOf(c.actor) })) },
+      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor} · ${date(c.at)}`), ...whoOf(v, c.actor) })) },
       ...(t.comments.length > comments.length ? [shownOf(comments.length, t.comments.length)] : []),
     ]
     : [{ type: "text", text: "No comments yet.", tone: "muted" }];
