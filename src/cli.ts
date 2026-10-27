@@ -21,7 +21,7 @@
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { dirname, join, resolve } from "node:path";
@@ -240,43 +240,44 @@ if (verb === "api") {
 // recipients (LOOM_EXPORT_RECIPIENTS); on import, decrypted with the owner's
 // key (LOOM_IMPORT_IDENTITY) into TASKSTORE_DB, never over a store that's
 // there unless --force. The plaintext only ever sits in a private temp dir.
-if (verb === "bundle") {
-  const sub = positional[0] ?? "";
+if (verb === "bundle") process.exit(bundle(positional[0] ?? "", "force" in flags));
+
+function bundle(sub: string, force: boolean): number {
   const age = process.env.LOOM_AGE || "age";
-  const fail = (msg: string): never => { console.error(`taskstore: ${msg}`); process.exit(1); };
+  const fail = (msg: string): number => { console.error(`taskstore: ${msg}`); return 1; };
+  if (sub !== "export" && sub !== "import") { console.error("usage: taskstore bundle export|import [--force]"); return 2; }
+  // The plaintext copy lives only here, and goes on every way out (exit codes are returned, never process.exit inside).
   const tmp = mkdtempSync(join(tmpdir(), "taskstore-bundle-"));
   try {
+    const plain = join(tmp, "store.db");
     if (sub === "export") {
       const recipients = (process.env.LOOM_EXPORT_RECIPIENTS ?? "").split(",").map((r) => r.trim()).filter(Boolean);
-      if (!recipients.length) fail("LOOM_EXPORT_RECIPIENTS is empty: a part is never written out in the clear");
-      if (!existsSync(dbPath) || !statSync(dbPath).isFile()) fail(`no store at ${dbPath} (set TASKSTORE_DB)`);
-      const copy = join(tmp, "store.db");
+      if (!recipients.length) return fail("LOOM_EXPORT_RECIPIENTS is empty: a part is never written out in the clear");
+      if (!existsSync(dbPath) || !statSync(dbPath).isFile()) return fail(`no store at ${dbPath} (set TASKSTORE_DB)`);
       const src = new Database(dbPath, { readonly: true });
-      try { src.prepare("VACUUM INTO ?").run(copy); } finally { src.close(); }
-      const r = spawnSync(age, ["-e", "-a", ...recipients.flatMap((x) => ["-r", x]), copy], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
-      if (r.status !== 0) fail(`age: ${(r.error?.message ?? r.stderr ?? "").trim().split("\n").pop()}`);
+      try { src.prepare("VACUUM INTO ?").run(plain); } finally { src.close(); }
+      const r = spawnSync(age, ["-e", "-a", ...recipients.flatMap((x) => ["-r", x]), plain], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+      if (r.status !== 0) return fail(`age: ${(r.error?.message ?? r.stderr ?? "").trim().split("\n").pop()}`);
       writeAll(r.stdout);
-      process.exit(0);
+      return 0;
     }
-    if (sub === "import") {
-      const identity = process.env.LOOM_IMPORT_IDENTITY;
-      if (!identity) fail("LOOM_IMPORT_IDENTITY names the owner's key file");
-      if (existsSync(dbPath) && !("force" in flags)) fail(`${dbPath} is already a store; restore onto a fresh one, or pass --force. Nothing was written.`);
-      const plain = join(tmp, "store.db");
-      const r = spawnSync(age, ["-d", "-i", identity as string, "-o", plain], { input: readFileSync(0), maxBuffer: 1024 * 1024 });
-      const head = r.status === 0 && existsSync(plain) ? readFileSync(plain).subarray(0, 16).toString("latin1") : "";
-      if (head !== "SQLite format 3\0") fail("the part doesn't decrypt with LOOM_IMPORT_IDENTITY, or isn't a store. Nothing was written.");
-      mkdirSync(dirname(dbPath), { recursive: true });
-      const dest = `${dbPath}.${process.pid}.tmp`;
-      copyFileSync(plain, dest);
-      chmodSync(dest, 0o600);
-      for (const side of ["-wal", "-shm"]) rmSync(dbPath + side, { force: true });
-      renameSync(dest, dbPath);
-      console.log(`restored the store to ${dbPath}`);
-      process.exit(0);
+    const identity = process.env.LOOM_IMPORT_IDENTITY;
+    if (!identity) return fail("LOOM_IMPORT_IDENTITY names the owner's key file");
+    if (existsSync(dbPath) && !force) return fail(`${dbPath} is already a store; restore onto a fresh one, or pass --force. Nothing was written.`);
+    const r = spawnSync(age, ["-d", "-i", identity, "-o", plain], { input: readFileSync(0), maxBuffer: 1024 * 1024 });
+    const bytes = r.status === 0 && existsSync(plain) ? readFileSync(plain) : Buffer.alloc(0);
+    if (bytes.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") {
+      return fail("the part doesn't decrypt with LOOM_IMPORT_IDENTITY, or isn't a store. Nothing was written.");
     }
-    console.error("usage: taskstore bundle export|import [--force]");
-    process.exit(2);
+    mkdirSync(dirname(dbPath), { recursive: true });
+    // Private from its first byte, and never through something already at that name ("wx").
+    const dest = `${dbPath}.${process.pid}.tmp`;
+    const fd = openSync(dest, "wx", 0o600);
+    try { writeSync(fd, bytes); } finally { closeSync(fd); }
+    for (const side of ["-wal", "-shm"]) rmSync(dbPath + side, { force: true });
+    renameSync(dest, dbPath);
+    console.log(`restored the store to ${dbPath}`);
+    return 0;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

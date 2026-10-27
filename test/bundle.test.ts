@@ -4,7 +4,7 @@
 // owner's recipients; on import, written where TASKSTORE_DB says, never over
 // a store that's already there.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -32,10 +32,13 @@ describe.skipIf(!hasAge)("taskstore bundle", () => {
     const recipient = execFileSync("age-keygen", ["-y", key], { encoding: "utf8" }).trim();
 
     expect(run(["bundle", "export"], { TASKSTORE_DB: db, LOOM_EXPORT_RECIPIENTS: "" }).status).not.toBe(0);
+    const before = readdirSync(tmpdir()).filter((d) => d.startsWith("taskstore-bundle-") && d !== dir.split("/").pop());
     const part = run(["bundle", "export"], { TASKSTORE_DB: db, LOOM_EXPORT_RECIPIENTS: recipient });
     expect(part.status, part.stderr).toBe(0);
     expect(part.stdout.startsWith("-----BEGIN AGE ENCRYPTED FILE-----")).toBe(true);
     expect(part.stdout).not.toContain("zebra");
+    // No plaintext copy is left behind in the temp dir.
+    expect(readdirSync(tmpdir()).filter((d) => d.startsWith("taskstore-bundle-") && d !== dir.split("/").pop())).toEqual(before);
 
     expect(run(["bundle", "import"], { TASKSTORE_DB: db, LOOM_IMPORT_IDENTITY: key }, part.stdout).status).not.toBe(0);
     const fresh = join(dir, "restored", "store.db");
