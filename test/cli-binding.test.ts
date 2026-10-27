@@ -71,6 +71,22 @@ async function statusOf(cliArgs: string, rest: string): Promise<number> {
   return Number(readFileSync(stFile, "utf8").trim());
 }
 
+// A disposable task, isolated from the shared beforeAll fixture (t-1..t-120)
+// — for a case that might mutate or destroy what it operates on under the
+// wrong implementation it exists to catch. Asserts the seed itself succeeded
+// rather than letting a missing id degrade the caller's command into one
+// with fewer positionals than intended (t-1112 round 3).
+let seedSeq = 0;
+async function createTask(title: string): Promise<string> {
+  const out = join(dir, `seed-${seedSeq++}.json`);
+  const run = await sh(`${cli} create "${title}" > '${out}'`);
+  expect(run.code).toBe(0);
+  const created = JSON.parse(readFileSync(out, "utf8")) as { ok: boolean; id: string };
+  expect(created.ok).toBe(true);
+  expect(created.id).toBeTruthy();
+  return created.id;
+}
+
 beforeAll(() => {
   // Build once, so `cli` above is the current source. tsc is a couple of
   // seconds and dist/ is gitignored, so this costs nothing a developer keeps.
@@ -514,6 +530,105 @@ describe("unknown flags are rejected", () => {
         const run = await sh(`${cli} ${command}`);
         expect(run.code).toBe(2);
         expect(run.stderr).toContain("--bogus");
+      });
+    }
+  });
+
+  // t-1112: every --bogus/--force/--__proto__ case above proves a flagless
+  // verb rejects a flag that belongs to NO verb. None of them would catch
+  // the Set for one of these ten verbs silently widening to include a flag
+  // that IS real elsewhere (e.g. KNOWN_FLAGS.ready gaining
+  // new Set(["status"]) by a copy-paste from list/search) — the flag would
+  // parse fine, checkKnownFlags would pass it, and buildCommand's switch
+  // would drop it on the floor with zero test failure: the pre-t-893
+  // silent-drop class, on the widening axis instead of the unknown-flag one.
+  // Each case below uses a flag that is genuinely allowed on a DIFFERENT
+  // verb (`from`, exactly one, never a "verb/verb" guess), so the case only
+  // passes if THIS verb's own Set stays empty. The donorCases block further
+  // down executes that `from`/flag pairing directly, rather than leaving it
+  // as an asserted-but-unchecked premise.
+  //
+  // Round 2 (cold-review): claim/delete/comment don't just fail to mutate
+  // the shared t-1 fixture if the flag check is bypassed by a real widening
+  // bug — doLifecycle claims it, doDelete hard-removes it and cascades its
+  // links, doComment appends to it — which would corrupt state the REST of
+  // this (beforeAll-shared, file-wide) suite depends on, instead of just
+  // failing this one assertion locally. Every id-taking case below gets its
+  // own disposable task via createTask(), never the shared t-1/t-2 fixture
+  // — except show, which is read-only and so cannot cause that corruption;
+  // it uses t-1 like every other show test in this file.
+  describe("flagless verbs reject a real flag borrowed from another verb (widening witness)", () => {
+    const cases: Record<string, { needsTask: boolean; positionals: (id: string) => string[]; flag: string; from: string }> = {
+      claim: { needsTask: true, positionals: (id) => [id], flag: "spec-item-ref", from: "create" },
+      unclaim: { needsTask: true, positionals: (id) => [id], flag: "reason", from: "close" },
+      reopen: { needsTask: true, positionals: (id) => [id], flag: "title", from: "update" },
+      delete: { needsTask: true, positionals: (id) => [id], flag: "description", from: "update" },
+      comment: { needsTask: true, positionals: (id) => [id, `"hi"`], flag: "priority", from: "update" },
+      show: { needsTask: false, positionals: () => ["t-1"], flag: "type", from: "create" },
+      // The ticket's own worked example (t-1112): ready sits right below
+      // list/search in KNOWN_FLAGS, both of which carry --status — the
+      // realistic copy-paste leak this whole case exists to catch.
+      ready: { needsTask: false, positionals: () => [], flag: "status", from: "list" },
+      report: { needsTask: false, positionals: () => [], flag: "parent", from: "create" },
+      export: { needsTask: false, positionals: () => [], flag: "legacy-ref", from: "create" },
+    };
+    for (const [verb, { needsTask, positionals, flag, from }] of Object.entries(cases)) {
+      it(`${verb} --${flag} (real on ${from}) exits 2 and names the flag`, async () => {
+        const id = needsTask ? await createTask(`widening probe seed for ${verb}`) : "";
+        const run = await sh(`${cli} ${verb} ${positionals(id).join(" ")} --${flag} x`);
+        expect(run.code).toBe(2);
+        expect(run.stderr).toContain(`--${flag}`);
+      });
+    }
+
+    // import is a tenth empty-Set verb (round-1 cold-review finding, t-1112):
+    // it sits directly below export in KNOWN_FLAGS, the same adjacency this
+    // block's ready/list case exists to catch, and was missed in the table
+    // above because it takes a file path instead of a task id. Same shape
+    // as the "caught before the file is read" case above, but with a flag
+    // real on update (--assignee) instead of a bogus one, so a widened
+    // import Set is what this specifically witnesses.
+    it("import --assignee (real on update) exits 2 and names the flag, without reading the file", async () => {
+      const missing = join(dir, "does-not-exist-widening.json");
+      const run = await sh(`${cli} import '${missing}' --assignee mark`);
+      expect(run.code).toBe(2);
+      expect(run.stderr).toContain("--assignee");
+    });
+
+    // Round 2 (cold-review): the `from` field above asserts each borrowed
+    // flag is real on its donor verb; nothing ran the donor to prove it.
+    //
+    // Round 3 (cold-review): a first attempt at that just asserted
+    // stderr didn't contain "unknown flag" — which stays green even if the
+    // donor's entire KNOWN_FLAGS entry were deleted (checkKnownFlags
+    // returns early on an unrecognized verb per :101, so NO flag gets
+    // rejected, bogus or real). Pairing the real flag with an actual
+    // unknown one in the same call closes that: it only passes if
+    // checkKnownFlags both ran AND specifically let the real flag through
+    // while still catching the unrelated bogus one — proving the flag is
+    // IN the Set, not merely that the verb's check was skipped entirely.
+    const donorCases: Record<string, { needsTask: boolean; flag: string; command: (id: string) => string }> = {
+      "create --spec-item-ref": { needsTask: false, flag: "spec-item-ref", command: () => `create "donor probe" --spec-item-ref r` },
+      "create --type": { needsTask: false, flag: "type", command: () => `create "donor probe" --type task` },
+      // Seeds its own parent rather than pointing at the shared t-1 (round 3:
+      // this was the one place the donor loop reached into the beforeAll
+      // fixture to mutate it, contradicting the no-shared-fixture rule above).
+      "create --parent": { needsTask: true, flag: "parent", command: (id) => `create "donor probe" --parent ${id}` },
+      "create --legacy-ref": { needsTask: false, flag: "legacy-ref", command: () => `create "donor probe" --legacy-ref beads:1` },
+      "list --status": { needsTask: false, flag: "status", command: () => `list --status open` },
+      "close --reason": { needsTask: true, flag: "reason", command: (id) => `close ${id} --reason x` },
+      "update --title": { needsTask: true, flag: "title", command: (id) => `update ${id} --title x` },
+      "update --description": { needsTask: true, flag: "description", command: (id) => `update ${id} --description x` },
+      "update --priority": { needsTask: true, flag: "priority", command: (id) => `update ${id} --priority 1` },
+      "update --assignee": { needsTask: true, flag: "assignee", command: (id) => `update ${id} --assignee mark` },
+    };
+    for (const [label, { needsTask, flag, command }] of Object.entries(donorCases)) {
+      it(`donor premise: ${label} is accepted alongside an unrelated unknown flag`, async () => {
+        const id = needsTask ? await createTask(`donor probe (${label})`) : "";
+        const run = await sh(`${cli} ${command(id)} --probe-bogus-flag x`);
+        expect(run.code).toBe(2);
+        expect(run.stderr).toContain("--probe-bogus-flag");
+        expect(run.stderr).not.toContain(`--${flag}`);
       });
     }
   });
