@@ -59,8 +59,8 @@ describe("manifest", () => {
     expect(m.tab).toEqual({ label: "Tasks" });
     expect(m.tile).toEqual({ label: "Work", value: "2 in progress", detail: "1 ready at p0–p1", tone: "warn", page: "" });
     expect(m.asks.map(({ at, ...a }) => a)).toEqual([
-      { text: "owner doing", meta: "t-4 · p2", page: "task/t-4", label: "Open" },
-      { text: "pick the key recovery", meta: "t-3 · p3", page: "task/t-3", label: "Open" },
+      { text: "owner doing", meta: "t-4 · p2", page: "task/t-4", label: "Open", kind: "decision", attention: false },
+      { text: "pick the key recovery", meta: "t-3 · p3", page: "task/t-3", label: "Open", kind: "decision", attention: false },
     ]);
     // Each carries when it was started, else filed: loom shows its age on the card.
     expect(m.asks.every((a) => typeof a.at === "string" && !Number.isNaN(Date.parse(a.at)))).toBe(true);
@@ -70,6 +70,12 @@ describe("manifest", () => {
     const m = manifest(view(state([{ op: "create", title: "x", priority: 2 }, { op: "update", id: "t-1", set: { assignee: "gage" } }]), "gage"));
     expect(m.tile).toEqual({ label: "Work", value: "0 in progress", detail: "0 ready at p0–p1", page: "" });
     expect(m.asks.map((a) => a.meta)).toEqual(["t-1 · p2"]);
+  });
+
+  it("files the owner's tasks as decisions; only p0–p1 needs the owner now (loom's Inbox counts it)", () => {
+    const m = manifest(view(state([{ op: "create", title: "hot", priority: 1 }, { op: "update", id: "t-1", set: { assignee: "gage" } },
+      { op: "create", title: "cold", priority: 3 }, { op: "update", id: "t-2", set: { assignee: "gage" } }]), "gage"));
+    expect(m.asks.map((a) => [a.text, a.kind, a.attention])).toEqual([["hot", "decision", undefined], ["cold", "decision", false]]);
   });
 
   it("caps asks at 10", () => {
@@ -246,7 +252,7 @@ describe("taskstore ui (the CLI verbs)", () => {
   it("ui --json is the v2 manifest", () => {
     const m = json(run(["ui", "--json"], "", { TASKSTORE_OWNER: "jonathan" }));
     expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready at p0–p1" } });
-    expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Open", at: expect.any(String) }]);
+    expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "decision", attention: false }]);
   });
 
   it("ui page --json answers both pages, and Not found for junk", () => {
