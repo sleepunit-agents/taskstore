@@ -50,6 +50,11 @@
         "name": "TASKSTORE_AGENTS",
         "label": "Agents that may use the store over loom's API",
         "hint": "comma-separated agent names"
+      },
+      {
+        "name": "TASKSTORE_ON_OWNER_COMMENT",
+        "label": "When the owner comments from the page",
+        "hint": "a command as a JSON array, \"{id}\" for the task, e.g. a wake for the agent; the task also goes back to the first of TASKSTORE_AGENTS"
       }
     ]
   }
