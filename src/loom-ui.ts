@@ -199,20 +199,28 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const row = (t: Task, meta: string, tone?: string) => ({
     text: clip(t.title, TITLE_MAX), meta: clip(`${meta} · ${t.id} · p${t.priority}`), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
   });
-  const list = (id: string, title: string | undefined, items: Array<Record<string, unknown>>, empty: string, total: number) => sections.push({
-    id, ...(title ? { title } : {}),
-    blocks: items.length ? [{ type: "list", items }, ...(total > items.length ? [shownOf(items.length, total)] : [])] : [{ type: "text", text: empty, tone: "muted" }],
-  });
+  // A page of LIST_SHOWN at a time: ?page=<n> (from 1), the list saying where it is so loom draws the pager
+  // (loom docs/extensions.md, "pages"). The filters ride along: loom keeps the page's other query keys.
+  const want = Number(typeof query.page === "string" ? query.page : 1);
+  const list = (id: string, title: string | undefined, all: Array<Record<string, unknown>>, empty: string) => {
+    const count = Math.max(1, Math.ceil(all.length / LIST_SHOWN));
+    const at = Number.isInteger(want) && want >= 1 && want <= count ? want : 1;
+    const items = all.slice((at - 1) * LIST_SHOWN, at * LIST_SHOWN);
+    sections.push({
+      id, ...(title ? { title } : {}),
+      blocks: items.length ? [{ type: "list", items, ...(count > 1 ? { pages: { param: "page", at, count, total: all.length } } : {}) }] : [{ type: "text", text: empty, tone: "muted" }],
+    });
+  };
 
   if (show === "blocked") {
-    const rows = blocked.filter(byP).slice(0, LIST_SHOWN).map((t) => {
+    const rows = blocked.filter(byP).map((t) => {
       const on = v.links.filter((l) => l.type === "blocks" && l.id === t.id && v.tasks.find((x) => x.id === l.dependsOn)?.status !== "closed").map((l) => l.dependsOn);
       return row(t, `blocked by ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, "muted");
     });
-    list("blocked", `Blocked${at}`, rows, `Nothing blocked${at}.`, blocked.filter(byP).length);
+    list("blocked", `Blocked${at}`, rows, `Nothing blocked${at}.`);
   } else if (show === "done") {
-    const rows = done.filter(byP).slice(0, LIST_SHOWN).map((t) => row(t, `done ${humanDate(t.closedAt, v.now, v.timeZone)}`, "ok"));
-    list("done", `Done in the last ${DONE_DAYS} days${at}`, rows, `Nothing done in the last ${DONE_DAYS} days${at}.`, done.filter(byP).length);
+    const rows = done.filter(byP).map((t) => row(t, `done ${humanDate(t.closedAt, v.now, v.timeZone)}`, "ok"));
+    list("done", `Done in the last ${DONE_DAYS} days${at}`, rows, `Nothing done in the last ${DONE_DAYS} days${at}.`);
   } else {
     const seen = new Set<string>();
     const take = (t: Task) => (seen.has(t.id) ? false : (seen.add(t.id), true));
@@ -222,7 +230,7 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     const ready = v.ready.filter((e) => pq === undefined || e.priority === pq).map((e) => tasks.get(e.id)).filter((t): t is Task => !!t).filter(take)
       .map((t) => row(t, "ready"));
     const all = [...yours, ...doing, ...ready];
-    list("open", pq === undefined ? undefined : `Open${at}`, all.slice(0, LIST_SHOWN), `Nothing open${at}.`, all.length);
+    list("open", pq === undefined ? undefined : `Open${at}`, all, `Nothing open${at}.`);
   }
 
   return {
