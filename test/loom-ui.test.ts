@@ -116,11 +116,22 @@ describe("Work page", () => {
     expect(section(page(view(base()), { path: "", query: { priority: "9", show: "nope" } }), "open")!.title).toBeUndefined();
   });
 
-  it("shows N of M past the cap", () => {
-    const s = state(Array.from({ length: 60 }, () => ({ op: "create", title: "x", priority: 1 })));
-    const p = page(view(s), { path: "" });
-    expect(block(p, "open", "list")!.items).toHaveLength(50);
-    expect(block(p, "open", "text")!.text).toBe("Shown 50 of 60.");
+  it("pages past the cap: 50 a page, ?page=n, and the list says where it is (loom draws the pager)", () => {
+    const s = state(Array.from({ length: 60 }, (_, i) => ({ op: "create", title: `x${i}`, priority: 1 })));
+    const p1 = page(view(s), { path: "" });
+    expect(block(p1, "open", "list")!.items).toHaveLength(50);
+    expect(block(p1, "open", "list")!.pages).toEqual({ param: "page", at: 1, count: 2, total: 60 });
+    const p2 = page(view(s), { path: "", query: { page: "2" } });
+    expect(block(p2, "open", "list")!.items).toHaveLength(10);
+    expect(block(p2, "open", "list")!.pages).toMatchObject({ at: 2, count: 2 });
+    // Page 2 is the rest: nothing on both.
+    const titles = (p: ReturnType<typeof page>) => block(p, "open", "list")!.items!.map((i) => i.text);
+    expect(titles(p2).some((t) => titles(p1).includes(t))).toBe(false);
+    // A page past the end, or not a page at all, is the first.
+    expect(block(page(view(s), { path: "", query: { page: "9" } }), "open", "list")!.pages).toMatchObject({ at: 1 });
+    expect(block(page(view(s), { path: "", query: { page: "two" } }), "open", "list")!.pages).toMatchObject({ at: 1 });
+    // One page's worth says nothing about pages.
+    expect(block(page(view(base()), { path: "" }), "open", "list")!.pages).toBeUndefined();
   });
 });
 
