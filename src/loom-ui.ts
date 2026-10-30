@@ -145,8 +145,9 @@ export function manifest(v: UiView) {
       label: "Open",
       // Its age on the card: since it was started, else since it was filed.
       at: t.startedAt ?? t.createdAt,
-      // loom's Inbox files it under Decisions; only a p0–p1 task needs the owner now (counted, unread until opened).
-      kind: "decision" as const,
+      // A task waiting on the owner: loom's Inbox files it under To do (it was Decisions, with nothing to choose: Jonathan,
+      // 2026-10-30). Only an urgent or high-priority task needs the owner now (counted, unread until opened).
+      kind: "todo" as const,
       ...(t.priority <= 1 ? {} : { attention: false as const }),
     })),
   };
