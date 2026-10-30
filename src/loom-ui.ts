@@ -83,33 +83,45 @@ function ownersCall(v: UiView): Task[] {
 
 const urgent = (v: UiView) => v.ready.filter((e) => e.priority <= 1);
 
-/** "Sat Oct 24, 12:09 pm"; the year joins in when it isn't this one. */
+/**
+ * "12:09 PM" today, "Oct 24, 12:09 PM" another day, "Jan 2, 2025, 9:05 AM"
+ * another year; always 12-hour, in the given zone.
+ */
 export function humanDate(iso: string | undefined, now: Date, timeZone?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  let parts: Intl.DateTimeFormatPart[];
-  let year: string;
   const opts: Intl.DateTimeFormatOptions = {
-    weekday: "short", month: "short", day: "numeric", year: "numeric",
+    month: "short", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit", hour12: true,
   };
+  let f: Intl.DateTimeFormat;
   try {
-    const f = new Intl.DateTimeFormat("en-US", { ...opts, timeZone });
-    parts = f.formatToParts(d);
-    year = f.formatToParts(now).find((p) => p.type === "year")?.value ?? "";
+    f = new Intl.DateTimeFormat("en-US", { ...opts, timeZone });
   } catch {
     // An invalid TZ is a RangeError from Intl; fall back to the system zone.
-    const f = new Intl.DateTimeFormat("en-US", opts);
-    parts = f.formatToParts(d);
-    year = f.formatToParts(now).find((p) => p.type === "year")?.value ?? "";
+    f = new Intl.DateTimeFormat("en-US", opts);
   }
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const y = get("year") !== year ? ` ${get("year")}` : "";
-  return `${get("weekday")} ${get("month")} ${get("day")}${y}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toLowerCase()}`;
+  const parts = (x: Date) => {
+    const ps = f.formatToParts(x);
+    return (t: string) => ps.find((p) => p.type === t)?.value ?? "";
+  };
+  const get = parts(d);
+  const today = parts(now);
+  const time = `${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()}`;
+  if (get("year") !== today("year")) return `${get("month")} ${get("day")}, ${get("year")}, ${time}`;
+  if (get("month") === today("month") && get("day") === today("day")) return time;
+  return `${get("month")} ${get("day")}, ${time}`;
 }
 
-const statusWords = (s: string) => (s === "in_progress" ? "in progress" : s);
+/** Priority in words (0 is highest). */
+export const PRIORITY_WORDS = ["Urgent", "High", "Normal", "Low", "Someday"];
+export const priorityWord = (n: number) => PRIORITY_WORDS[n] ?? `Priority ${n}`;
+/** "Normal priority" (as meta), lowercased mid-phrase. */
+const priorityMeta = (n: number) => (PRIORITY_WORDS[n] ? `${PRIORITY_WORDS[n]} priority` : `Priority ${n}`);
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+const statusWords = (s: string) => cap(s === "in_progress" ? "in progress" : s);
 
 // ------------------------------------------------------------- manifest
 
@@ -122,13 +134,13 @@ export function manifest(v: UiView) {
     tile: {
       label: "Work",
       value: `${doing} in progress`,
-      detail: `${hot} ready at p0–p1`,
+      detail: `${hot} ready, urgent or high`,
       ...(hot ? { tone: "warn" } : {}),
       page: "",
     },
     asks: ownersCall(v).slice(0, MAX_ASKS).map((t) => ({
       text: clip(t.title, TITLE_MAX),
-      meta: `${t.id} · p${t.priority}`,
+      meta: `${priorityMeta(t.priority)} · ${t.id}`,
       ...taskLink(t.id),
       label: "Open",
       // Its age on the card: since it was started, else since it was filed.
@@ -175,7 +187,7 @@ const whoOf = (v: UiView, who: string) => (v.owner && who === v.owner ? { avatar
 export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const show = typeof query.show === "string" && SHOWS.includes(query.show) ? query.show : "";
   const pq = typeof query.priority === "string" && PRIORITIES.includes(query.priority) ? Number(query.priority) : undefined;
-  const at = pq === undefined ? "" : ` at p${pq}`;
+  const at = pq === undefined ? "" : `, ${priorityMeta(pq).toLowerCase()}`;
   const byP = (t: Task) => pq === undefined || t.priority === pq;
   const open = v.tasks.filter((t) => t.status !== "closed");
   const blocked = open.filter((t) => t.status === "open" && isBlocked(v, t.id));
@@ -197,7 +209,7 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   }];
 
   const row = (t: Task, meta: string, tone?: string) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip(`${meta} · ${t.id} · p${t.priority}`), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
+    text: clip(t.title, TITLE_MAX), meta: clip(`${cap(meta)} · ${priorityMeta(t.priority)} · ${t.id}`), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
   });
   // A page of LIST_SHOWN at a time: ?page=<n> (from 1), the list saying where it is so loom draws the pager
   // (loom docs/extensions.md, "pages"). The filters ride along: loom keeps the page's other query keys.
@@ -251,10 +263,10 @@ export function taskPage(v: UiView, id: string): Page {
   const date = (s?: string) => humanDate(s, v.now, v.timeZone);
   const title = (tid: string) => v.tasks.find((x) => x.id === tid)?.title;
 
-  const status = t.status === "open" && isBlocked(v, t.id) ? "open (blocked)" : statusWords(t.status);
+  const status = t.status === "open" && isBlocked(v, t.id) ? "Open (blocked)" : statusWords(t.status);
   const kv: Array<Record<string, string>> = [
     { label: "status", value: status },
-    { label: "priority", value: `p${t.priority}` },
+    { label: "priority", value: priorityWord(t.priority) },
     ...(t.type !== "task" ? [{ label: "type", value: t.type }] : []),
     { label: "assignee", value: clip(t.assignee ?? "nobody") },
     { label: "opened", value: clip(`${date(t.createdAt)} by ${t.createdBy}`) },
@@ -293,7 +305,7 @@ export function taskPage(v: UiView, id: string): Page {
 
   return {
     title: clip(t.title),
-    intro: `${t.id} · ${status} · p${t.priority}`,
+    intro: `${status} · ${priorityMeta(t.priority)} · ${t.id}`,
     sections: [
       { id: "task", blocks: main },
       { id: "comments", title: "Comments", blocks: history },
@@ -316,7 +328,7 @@ export function newTaskPage(v: UiView): Page {
       fields: [
         { name: "title", label: "Title", kind: "text", required: true, hint: `${TITLE_MAX} characters at most.` },
         { name: "priority", label: "Priority", kind: "choice", value: "2",
-          options: [{ value: "1", label: "p1" }, { value: "2", label: "p2" }, { value: "3", label: "p3" }, { value: "4", label: "p4" }] },
+          options: ["1", "2", "3", "4"].map((value) => ({ value, label: priorityWord(Number(value)) })) },
         ...(v.owner ? [{ name: "mine", label: "Whose", kind: "choice", value: "",
           options: [{ value: "", label: "The agents'" }, { value: "1", label: "Mine" }] }] : []),
         { name: "description", label: "Notes", kind: "textarea" },

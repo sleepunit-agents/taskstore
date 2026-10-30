@@ -57,10 +57,10 @@ describe("manifest", () => {
     const m = manifest(view(base()));
     expect(m.v).toBe(2);
     expect(m.tab).toEqual({ label: "Tasks" });
-    expect(m.tile).toEqual({ label: "Work", value: "2 in progress", detail: "1 ready at p0–p1", tone: "warn", page: "" });
+    expect(m.tile).toEqual({ label: "Work", value: "2 in progress", detail: "1 ready, urgent or high", tone: "warn", page: "" });
     expect(m.asks.map(({ at, ...a }) => a)).toEqual([
-      { text: "owner doing", meta: "t-4 · p2", page: "task/t-4", label: "Open", kind: "decision", attention: false },
-      { text: "pick the key recovery", meta: "t-3 · p3", page: "task/t-3", label: "Open", kind: "decision", attention: false },
+      { text: "owner doing", meta: "Normal priority · t-4", page: "task/t-4", label: "Open", kind: "decision", attention: false },
+      { text: "pick the key recovery", meta: "Low priority · t-3", page: "task/t-3", label: "Open", kind: "decision", attention: false },
     ]);
     // Each carries when it was started, else filed: loom shows its age on the card.
     expect(m.asks.every((a) => typeof a.at === "string" && !Number.isNaN(Date.parse(a.at)))).toBe(true);
@@ -68,8 +68,8 @@ describe("manifest", () => {
 
   it("has no warn tone when nothing at p0–p1 is ready, and honours another owner", () => {
     const m = manifest(view(state([{ op: "create", title: "x", priority: 2 }, { op: "update", id: "t-1", set: { assignee: "gage" } }]), "gage"));
-    expect(m.tile).toEqual({ label: "Work", value: "0 in progress", detail: "0 ready at p0–p1", page: "" });
-    expect(m.asks.map((a) => a.meta)).toEqual(["t-1 · p2"]);
+    expect(m.tile).toEqual({ label: "Work", value: "0 in progress", detail: "0 ready, urgent or high", page: "" });
+    expect(m.asks.map((a) => a.meta)).toEqual(["Normal priority · t-1"]);
   });
 
   it("files the owner's tasks as decisions; only p0–p1 needs the owner now (loom's Inbox counts it)", () => {
@@ -95,23 +95,23 @@ describe("Work page", () => {
     const items = block(p, "open", "list")!.items!;
     // The owner's first (waiting on you), then the rest in progress, then ready; each once.
     expect(items.map((i) => [i.page, i.tone ?? ""])).toEqual([["task/t-4", "warn"], ["task/t-3", "warn"], ["task/t-1", ""], ["task/t-2", ""]]);
-    expect(items[0]).toMatchObject({ text: "owner doing", meta: "waiting on you · t-4 · p2", agent: "jonathan" });
-    expect(items[2]).toMatchObject({ meta: "working on it · art · t-1 · p1", agent: "art" });
-    expect(items[3]).toMatchObject({ meta: "ready · t-2 · p0" });
+    expect(items[0]).toMatchObject({ text: "owner doing", meta: "Waiting on you · Normal priority · t-4", agent: "jonathan" });
+    expect(items[2]).toMatchObject({ meta: "Working on it · art · High priority · t-1", agent: "art" });
+    expect(items[3]).toMatchObject({ meta: "Ready · Urgent priority · t-2" });
     expect(items[3]).not.toHaveProperty("agent");
   });
 
   it("Blocked names what each waits on; Done is the last week, newest first", () => {
     const b = page(view(base()), { path: "", query: { show: "blocked" } });
-    expect(block(b, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "blocked by t-1 · t-6 · p2", tone: "muted", page: "task/t-6" }]);
+    expect(block(b, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Blocked by t-1 · Normal priority · t-6", tone: "muted", page: "task/t-6" }]);
     const d = page(view(base()), { path: "", query: { show: "done" } });
     expect(block(d, "done", "list")!.items!.map((i) => i.page)).toEqual(["task/t-5"]);
-    expect(block(d, "done", "list")!.items![0]).toMatchObject({ tone: "ok", meta: "done Sat Oct 24, 12:09 pm · t-5 · p1" });
+    expect(block(d, "done", "list")!.items![0]).toMatchObject({ tone: "ok", meta: "Done 12:09 PM · High priority · t-5" });
   });
 
   it("priority still narrows, and a bad filter value is ignored", () => {
     const p = page(view(base()), { path: "", query: { priority: "3" } });
-    expect(section(p, "open")!.title).toBe("Open at p3");
+    expect(section(p, "open")!.title).toBe("Open, low priority");
     expect(block(p, "open", "list")!.items!.map((i) => i.page)).toEqual(["task/t-3"]);
     expect(section(page(view(base()), { path: "", query: { priority: "9", show: "nope" } }), "open")!.title).toBeUndefined();
   });
@@ -139,18 +139,18 @@ describe("task page", () => {
   it("is the board's Task: the description as prose, Mark done, comments with marks, a Reply", () => {
     const p = page(view(base()), { path: "task/t-6", query: {} });
     expect(p.title).toBe("blocked");
-    expect(p.intro).toBe("t-6 · open (blocked) · p2");
+    expect(p.intro).toBe("Open (blocked) · Normal priority · t-6");
     expect(block(p, "facts", "kv")!.items).toEqual([
-      { label: "status", value: "open (blocked)" },
-      { label: "priority", value: "p2" },
+      { label: "status", value: "Open (blocked)" },
+      { label: "priority", value: "Normal" },
       { label: "assignee", value: "nobody" },
-      { label: "opened", value: "Sat Oct 24, 12:09 pm by art" },
+      { label: "opened", value: "12:09 PM by art" },
       { label: "parent", value: "t-7 an epic", page: "task/t-7" },
       { label: "depends on", value: "t-1 doing one", page: "task/t-1" },
     ]);
     expect(section(p, "facts")!.side).toBe(true);
     expect(block(p, "task", "buttons")!.items).toEqual([{ action: "close", label: "Mark done", tone: "primary", fields: { id: "t-6" } }]);
-    expect(block(p, "comments", "list")!.items).toEqual([{ text: "first note", meta: "art · Sat Oct 24, 12:30 pm", agent: "art" }]);
+    expect(block(p, "comments", "list")!.items).toEqual([{ text: "first note", meta: "art · 12:30 PM", agent: "art" }]);
     expect(block(p, "reply", "form")).toMatchObject({ action: "comment", title: "Reply", submit: "Send", hidden: { id: "t-6" }, fields: [{ name: "text", label: "Reply", kind: "textarea", required: true }] });
     expect(block(p, "task", "link")).toBeUndefined();   // loom's own back link does this now
   });
@@ -158,7 +158,7 @@ describe("task page", () => {
   it("the description is prose; the owner's task asks for their call; a closed one offers Reopen", () => {
     const one = page(view(base()), { path: "task/t-1" });
     expect(block(one, "task", "prose")).toEqual({ type: "prose", text: "Why and how." });
-    expect(block(one, "facts", "kv")!.items).toContainEqual({ label: "started", value: "Sat Oct 24, 12:09 pm" });
+    expect(block(one, "facts", "kv")!.items).toContainEqual({ label: "started", value: "12:09 PM" });
     expect(block(one, "task", "callout")).toBeUndefined();
     const mine = page(view(base()), { path: "task/t-4" });
     expect(block(mine, "task", "callout")).toMatchObject({ title: "Waiting on you", tone: "warn" });
@@ -176,7 +176,7 @@ describe("task page", () => {
     const s = state([{ op: "import", tasks: [{ id: "BD-1", title: "legacy", type: "task", status: "open", priority: 1, createdAt: AT, createdBy: "art", comments: [] }], links: [] }]);
     const m = manifest(view(s));
     const items = block(page(view(s), { path: "" }), "open", "list")!.items!;
-    expect(items[0]).toEqual({ text: "legacy", meta: "ready · BD-1 · p1" });
+    expect(items[0]).toEqual({ text: "legacy", meta: "Ready · High priority · BD-1" });
     expect(m.tile.value).toBe("0 in progress");
   });
 
@@ -190,12 +190,23 @@ describe("task page", () => {
 });
 
 describe("humanDate", () => {
-  it("reads like 'Sat Oct 24, 12:09 pm' in the given zone, with the year when it isn't this one", () => {
+  it("is 12-hour with AM/PM in the given zone: the time alone today, the date another day, the year another year", () => {
     const now = new Date(AT);
-    expect(humanDate(AT, now, "America/Chicago")).toBe("Sat Oct 24, 12:09 pm");
-    expect(humanDate(AT, now, "UTC")).toBe("Sat Oct 24, 5:09 pm");
-    expect(humanDate("2025-01-02T09:05:00Z", now, "UTC")).toBe("Thu Jan 2 2025, 9:05 am");
-    expect(humanDate(AT, now, "Not/AZone")).toMatch(/^Sat Oct 24, \d+:09 [ap]m$/);
+    expect(humanDate(AT, now, "America/Chicago")).toBe("12:09 PM");
+    expect(humanDate(AT, now, "UTC")).toBe("5:09 PM");
+    expect(humanDate("2026-10-23T04:40:00Z", now, "America/Chicago")).toBe("Oct 22, 11:40 PM");
+    expect(humanDate("2025-01-02T09:05:00Z", now, "UTC")).toBe("Jan 2, 2025, 9:05 AM");
+    expect(humanDate(AT, now, "Not/AZone")).toMatch(/^\d+:09 [AP]M$/);
+  });
+});
+
+describe("priority in words", () => {
+  it("names 0..4 Urgent, High, Normal, Low, Someday; the New task form offers them by name", () => {
+    const words = [0, 1, 2, 3, 4].map((n) => block(page(view(state([{ op: "create", title: "x", priority: n }])), { path: "task/t-1" }), "facts", "kv")!.items![1].value);
+    expect(words).toEqual(["Urgent", "High", "Normal", "Low", "Someday"]);
+    const form = block(page(view(base()), { path: "new" }), "new", "form")!;
+    expect((form.fields as Array<Record<string, unknown>>).find((f) => f.name === "priority")!.options)
+      .toEqual([{ value: "1", label: "High" }, { value: "2", label: "Normal" }, { value: "3", label: "Low" }, { value: "4", label: "Someday" }]);
   });
 });
 
@@ -262,8 +273,8 @@ describe("taskstore ui (the CLI verbs)", () => {
 
   it("ui --json is the v2 manifest", () => {
     const m = json(run(["ui", "--json"], "", { TASKSTORE_OWNER: "jonathan" }));
-    expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready at p0–p1" } });
-    expect(m.asks).toEqual([{ text: "yours", meta: "t-2 · p2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "decision", attention: false }]);
+    expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready, urgent or high" } });
+    expect(m.asks).toEqual([{ text: "yours", meta: "Normal priority · t-2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "decision", attention: false }]);
   });
 
   it("ui page --json answers both pages, and Not found for junk", () => {
