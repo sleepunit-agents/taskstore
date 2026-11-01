@@ -99,7 +99,7 @@ describe("Work page", () => {
     // No caller: the owner's tasks wear their initial and their name.
     expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "jonathan · Normal · t-4", avatar: "J" });
     expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "art · High · t-1", agent: "art", page: "task/t-1" }]);
-    expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Waiting on t-1 · Normal · t-6", tone: "muted", page: "task/t-6" }]);
+    expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Waiting on t-1 · Normal · t-6", page: "task/t-6" }]);
     expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Urgent · t-2", page: "task/t-2" }]);
     expect(p.sections.some((s) => s.blocks.some((b) => b.type === "stats" || b.type === "filters"))).toBe(false);
   });
@@ -109,7 +109,8 @@ describe("Work page", () => {
     const p = page(view(s, ""), { path: "" });
     const of = (id: string) => block(p, id, "list")!.items!.map((i) => i.text);
     expect([of("next"), of("ready"), of("later")]).toEqual([["p0", "p1"], ["p2"], ["p3", "p4"]]);
-    expect(section(p, "later")!.blocks[0]).toMatchObject({ items: [{ tone: "muted" }, { tone: "muted" }] });
+    // No tone dot on any row: the group says it.
+    expect(p.sections.flatMap((s) => s.blocks.flatMap((b) => (b as Blk).items ?? [])).some((i) => "tone" in i)).toBe(false);
     expect(block(p, "ready", "list")!.items![0].meta).toBe("t-3");
   });
 
@@ -117,7 +118,9 @@ describe("Work page", () => {
     const p = page(view(base()), { path: "" });
     const items = block(p, "done", "list")!.items!;
     expect(items.map((i) => i.page)).toEqual(["task/t-5"]);
-    expect(items[0]).toMatchObject({ tone: "ok", meta: "jonathan · Done 12:09 PM · t-5" });
+    // Read like every other row: whose, priority, id, then when.
+    expect(items[0]).toMatchObject({ meta: "jonathan · High · t-5 · 12:09 PM" });
+    expect(items[0]).not.toHaveProperty("tone");
     const q = page(view(state([2, 3].map((priority) => ({ op: "create", title: `p${priority}`, priority })))), { path: "" });
     expect([section(q, "ready")!.fold, section(q, "later")!.fold]).toEqual(["closed", "closed"]);
   });
