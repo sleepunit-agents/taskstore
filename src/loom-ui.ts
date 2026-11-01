@@ -27,17 +27,21 @@ export interface UiView {
   now: Date;
   /** IANA zone for dates (TZ); undefined = the system default. */
   timeZone?: string;
+  /**
+   * Who's looking, as a People slug, when it's a household owner (loom's `caller`): the owner's tasks are theirs, so
+   * they read "you" and wear that person's avatar. Undefined outside a household, or for anyone else.
+   */
+  viewer?: string;
 }
 
 type Block = Record<string, unknown> & { type: string };
-interface Section { id: string; title?: string; tone?: string; side?: boolean; blocks: Block[] }
+interface Section { id: string; title?: string; tone?: string; side?: boolean; fold?: "open" | "closed"; blocks: Block[] }
 export interface Page { title: string; intro?: string; sections: Section[]; /** loom draws it as the "+" beside the title. */ add?: { page: string; label: string } }
 
 export const NOT_FOUND: Page = { title: "Not found", sections: [] };
 
 const MAX_ASKS = 10;
 const HISTORY_SHOWN = 100;
-const MAX_ITEMS = 200; // the contract's rows a list
 const MAX_STR = 2000; // the contract's per-string limit
 const TITLE_MAX = 300;
 const PROSE_MAX = 20000; // the contract's prose limit
@@ -159,6 +163,7 @@ export function manifest(v: UiView) {
 export function page(v: UiView, req: unknown): Page {
   if (!isObj(req) || typeof req.path !== "string" || !pathOk(req.path)) return NOT_FOUND;
   const query = isObj(req.query) ? req.query : {};
+  v = { ...v, viewer: viewerOf(req.caller) };
   if (req.path === "") return workPage(v, query);
   if (req.path === "new") return newTaskPage(v);
   const m = /^task\/([^/]+)$/.exec(req.path);
@@ -167,6 +172,13 @@ export function page(v: UiView, req: unknown): Page {
 }
 
 const PRIORITIES = ["0", "1", "2", "3", "4"];
+const PERSON = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** loom's caller (docs/extensions.md, "caller"): a household owner, by their People slug; anyone else isn't "you". */
+function viewerOf(caller: unknown): string | undefined {
+  if (!isObj(caller) || caller.kind !== "owner" || caller.agents !== "*" || typeof caller.who !== "string") return undefined;
+  return PERSON.test(caller.who) && caller.who.length <= 80 ? caller.who : undefined;
+}
 
 function shownOf(shown: number, total: number): Block {
   return { type: "text", text: `Shown ${shown} of ${total}.`, tone: "muted" };
@@ -178,8 +190,62 @@ const GROUP_SHOWN = 15;
 const AGENT_ID = /^[a-z][a-z0-9-]{0,39}$/;
 /** An assignee that looks like an agent id: loom draws its mark (an unknown id draws nothing). */
 const agentOf = (who?: string) => (who && AGENT_ID.test(who) ? { agent: who } : {});
-/** A comment's lead: the owner's initial in a circle (a person, not an agent), else the agent's mark. */
-const whoOf = (v: UiView, who: string) => (v.owner && who === v.owner ? { avatar: who.slice(0, 1).toUpperCase() } : agentOf(who));
+/** The page itself, when nobody's set as the owner: loom's (its own mark), not a person's or an agent's. */
+const PAGE_ACTOR = "loom-page";
+/**
+ * Who someone is on a row (Jonathan, 2026-10-31: "everything should have one"): the owner wears the viewer's own
+ * avatar when the owner is looking (else their initial), the page wears loom's mark, and an agent its own.
+ */
+const whoOf = (v: UiView, who?: string) =>
+  !who ? {}
+    : v.owner && who === v.owner ? (v.viewer ? { person: v.viewer } : { avatar: who.slice(0, 1).toUpperCase() })
+      : who === PAGE_ACTOR ? { agent: "loom" } : agentOf(who);
+/** Who, in words: "you" for the owner while they're the one looking. */
+const nameOf = (v: UiView, who?: string) => (who && v.owner && who === v.owner && v.viewer ? "you" : who);
+
+const WEEKS = 8;
+const DAY = 86_400_000;
+
+/** Monday 00:00 of `d`'s week, in the page's zone (near enough: the zone's date, at UTC midnight). */
+function weekStart(d: Date, timeZone?: string): number {
+  const [y, m, day] = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d).split("-").map(Number);
+  const t = Date.UTC(y, m - 1, day);
+  return t - ((new Date(t).getUTCDay() + 6) % 7) * DAY;
+}
+
+/**
+ * Is the pile growing or shrinking: tasks opened and done each week, the last WEEKS weeks (this one last), as 000h's
+ * bar chart (Jonathan, 2026-10-31: the stats "might just be something worth graphing"), and how many are open now.
+ */
+function weeks(v: UiView): Section {
+  const now = weekStart(v.now, v.timeZone);
+  const first = now - (WEEKS - 1) * 7 * DAY;
+  const opened = new Array<number>(WEEKS).fill(0);
+  const closed = new Array<number>(WEEKS).fill(0);
+  const bucket = (iso?: string) => {
+    if (!iso || Number.isNaN(Date.parse(iso))) return -1;
+    const w = Math.round((weekStart(new Date(iso), v.timeZone) - first) / (7 * DAY));
+    return w >= 0 && w < WEEKS ? w : -1;
+  };
+  for (const t of v.tasks) {
+    const o = bucket(t.createdAt);
+    if (o >= 0) opened[o]++;
+    const c = t.status === "closed" ? bucket(t.closedAt) : -1;
+    if (c >= 0) closed[c]++;
+  }
+  const label = (i: number) => new Date(first + i * 7 * DAY).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const open = v.tasks.filter((t) => t.status !== "closed" && t.type !== "epic").length;
+  const net = opened[WEEKS - 1] - closed[WEEKS - 1];
+  return {
+    id: "weeks",
+    blocks: [{
+      type: "chart", kind: "bar", caption: "Opened and done, by week",
+      summary: { label: "Open", value: open.toLocaleString("en-US"), detail: `${net > 0 ? "+" : ""}${net} this week` },
+      series: [{ key: "opened", label: "Opened", color: "pink" }, { key: "done", label: "Done", color: "olive" }],
+      data: opened.map((n, i) => ({ label: i === WEEKS - 1 ? "This week" : label(i), opened: n, done: closed[i] })),
+    }],
+  };
+}
 
 /**
  * Work, in groups (Jonathan, 2026-10-31: "break the list of tasks into groups ... logical groupings"; the
@@ -198,38 +264,39 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
 
   const row = (t: Task, meta: Array<string | false | undefined>, tone?: string) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
+    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...(tone ? { tone } : {}), ...whoOf(v, t.assignee), ...taskLink(t.id),
   });
+  const who = (t: Task) => nameOf(v, t.assignee);
   const pri = (t: Task) => priorityWord(t.priority);
-  const sections: Section[] = [];
-  const group = (id: string, title: string, rows: Array<Record<string, unknown>>, tone?: string) => {
+  const sections: Section[] = [weeks(v)];
+  // Each group folds under its title (Jonathan, 2026-10-31: "can we make the groups collapsible?"): what needs a look
+  // starts open, the long tail of the queue starts folded; loom keeps each viewer's own open and close after that.
+  const group = (id: string, title: string, rows: Array<Record<string, unknown>>, tone?: string, fold: "open" | "closed" = "open") => {
     if (!rows.length) return;
     const count = Math.ceil(rows.length / GROUP_SHOWN);
     const want = Number(typeof query[id] === "string" ? query[id] : 1);
     const at = Number.isInteger(want) && want >= 1 && want <= count ? want : 1;
     const items = rows.slice((at - 1) * GROUP_SHOWN, at * GROUP_SHOWN);
     sections.push({
-      id, title: `${title} · ${rows.length}`, ...(tone ? { tone } : {}),
-      blocks: [{ type: "list", items, ...(count > 1 ? { pages: { param: id, at, count, total: rows.length } } : {}) }],
+      id, title: `${title} · ${rows.length}`, ...(tone ? { tone } : {}), fold,
+      // `who`: every row says whose it is, nobody's included (loom draws that as a dashed circle).
+      blocks: [{ type: "list", who: true, items, ...(count > 1 ? { pages: { param: id, at, count, total: rows.length } } : {}) }],
     });
   };
 
-  group("yours", "Waiting on you", ownersCall(v).filter(take).map((t) => row(t, [pri(t), t.id])), "warn");
-  group("doing", "In progress", inProgress(v).filter(take).map((t) => row(t, [t.assignee, pri(t), t.id])));
+  group("yours", "Waiting on you", ownersCall(v).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), "warn");
+  group("doing", "In progress", inProgress(v).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
   const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
   group("blocked", "Blocked", blocked.filter(take).map((t) => {
     const on = blockers(t);
     return row(t, [`Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id], "muted");
   }));
-  group("next", "Up next", ready.filter((t) => t.priority <= 1).filter(take).map((t) => row(t, [pri(t), t.id])));
-  group("ready", "Ready", ready.filter((t) => t.priority === 2).filter(take).map((t) => row(t, [t.id])));
-  group("later", "Later", ready.filter((t) => t.priority >= 3).filter(take).map((t) => row(t, [pri(t), t.id], "muted")));
-  if (done.length) {
-    sections.push({ id: "done", blocks: [{ type: "details", summary: `Done in the last ${DONE_DAYS} days`, blocks: [
-      { type: "list", items: done.slice(0, MAX_ITEMS).map((t) => row(t, [`Done ${humanDate(t.closedAt, v.now, v.timeZone)}`, t.id], "ok")) },
-    ] }] });
-  }
-  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] });
+  group("next", "Up next", ready.filter((t) => t.priority <= 1).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
+  group("ready", "Ready", ready.filter((t) => t.priority === 2).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
+  group("later", "Later", ready.filter((t) => t.priority >= 3).filter(take).map((t) => row(t, [who(t), pri(t), t.id], "muted")), undefined, "closed");
+  group("done", `Done in the last ${DONE_DAYS} days`, done
+    .map((t) => row(t, [who(t), `Done ${humanDate(t.closedAt, v.now, v.timeZone)}`, t.id], "ok")), undefined, "closed");
+  if (sections.length === 1) sections.push({ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] });
 
   return { title: "Tasks", add: { page: "new", label: "New task" }, sections };
 }
@@ -249,7 +316,7 @@ export function taskPage(v: UiView, id: string): Page {
     { label: "status", value: status },
     { label: "priority", value: priorityWord(t.priority) },
     ...(t.type !== "task" ? [{ label: "type", value: t.type }] : []),
-    { label: "assignee", value: clip(t.assignee ?? "nobody") },
+    { label: "assignee", value: clip(nameOf(v, t.assignee) ?? "nobody") },
     { label: "opened", value: clip(`${date(t.createdAt)} by ${t.createdBy}`) },
     ...(t.startedAt ? [{ label: "started", value: date(t.startedAt) }] : []),
     ...(t.closedAt ? [{ label: "closed", value: clip(`${date(t.closedAt)}${t.closeReason ? ` (${t.closeReason})` : ""}`) }] : []),
@@ -279,7 +346,7 @@ export function taskPage(v: UiView, id: string): Page {
   const comments = t.comments.slice(-HISTORY_SHOWN);
   const history: Block[] = comments.length
     ? [
-      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor} · ${date(c.at)}`), ...whoOf(v, c.actor) })) },
+      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor === PAGE_ACTOR ? "loom" : nameOf(v, c.actor)} · ${date(c.at)}`), ...whoOf(v, c.actor) })) },
       ...(t.comments.length > comments.length ? [shownOf(comments.length, t.comments.length)] : []),
     ]
     : [{ type: "text", text: "No comments yet.", tone: "muted" }];

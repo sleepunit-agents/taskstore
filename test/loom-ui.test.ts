@@ -89,12 +89,15 @@ describe("Work page", () => {
   it("is groups, each task once: waiting on you, in progress, blocked, up next; no counts or pills", () => {
     const p = page(view(base()), { path: "", query: {} });
     expect(p.title).toBe("Tasks");
-    expect(p.sections.map((s) => [s.id, s.title])).toEqual([
-      ["yours", "Waiting on you · 2"], ["doing", "In progress · 1"], ["blocked", "Blocked · 1"], ["next", "Up next · 1"], ["done", undefined],
+    expect(p.sections.map((s) => [s.id, s.title, s.fold])).toEqual([
+      ["weeks", undefined, undefined], ["yours", "Waiting on you · 2", "open"], ["doing", "In progress · 1", "open"], ["blocked", "Blocked · 1", "open"],
+      ["next", "Up next · 1", "open"], ["done", "Done in the last 7 days · 1", "closed"],
     ]);
+    expect(block(p, "yours", "list")!.who).toBe(true);
     expect(section(p, "yours")!.tone).toBe("warn");
     expect(block(p, "yours", "list")!.items!.map((i) => i.page)).toEqual(["task/t-4", "task/t-3"]);
-    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "Normal · t-4", agent: "jonathan" });
+    // No caller: the owner's tasks wear their initial and their name.
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "jonathan · Normal · t-4", avatar: "J" });
     expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "art · High · t-1", agent: "art", page: "task/t-1" }]);
     expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Waiting on t-1 · Normal · t-6", tone: "muted", page: "task/t-6" }]);
     expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Urgent · t-2", page: "task/t-2" }]);
@@ -110,12 +113,35 @@ describe("Work page", () => {
     expect(block(p, "ready", "list")!.items![0].meta).toBe("t-3");
   });
 
-  it("folds the last week's done at the foot, newest first", () => {
-    const d = section(page(view(base()), { path: "" }), "done")!.blocks[0] as Blk;
-    expect(d).toMatchObject({ type: "details", summary: "Done in the last 7 days" });
-    const items = (d.blocks as Blk[])[0].items!;
+  it("folds the last week's done at the foot, newest first, and the long queue too", () => {
+    const p = page(view(base()), { path: "" });
+    const items = block(p, "done", "list")!.items!;
     expect(items.map((i) => i.page)).toEqual(["task/t-5"]);
-    expect(items[0]).toMatchObject({ tone: "ok", meta: "Done 12:09 PM · t-5" });
+    expect(items[0]).toMatchObject({ tone: "ok", meta: "jonathan · Done 12:09 PM · t-5" });
+    const q = page(view(state([2, 3].map((priority) => ({ op: "create", title: `p${priority}`, priority })))), { path: "" });
+    expect([section(q, "ready")!.fold, section(q, "later")!.fold]).toEqual(["closed", "closed"]);
+  });
+
+  it("the owner is you, in their own avatar, when a household owner is looking (loom's caller)", () => {
+    const owner = { kind: "owner", who: "jonathan-barket", agents: "*" };
+    const p = page(view(base()), { path: "", caller: owner });
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ meta: "you · Normal · t-4", person: "jonathan-barket" });
+    expect(block(p, "yours", "list")!.items![0]).not.toHaveProperty("agent");
+    // An agent's owner, or a caller that isn't one, isn't "you".
+    for (const caller of [{ ...owner, agents: ["mark"] }, { kind: "stranger" }, { ...owner, who: "Not A Slug" }]) {
+      expect(block(page(view(base()), { path: "", caller }), "yours", "list")!.items![0]).toMatchObject({ meta: "jonathan · Normal · t-4", avatar: "J" });
+    }
+    const t = page(view(base()), { path: "task/t-4", caller: owner });
+    expect(block(t, "facts", "kv")!.items!.find((i) => i.label === "assignee")).toEqual({ label: "assignee", value: "you" });
+  });
+
+  it("charts what was opened and done each week, the last 8, this one last", () => {
+    const c = block(page(view(base()), { path: "" }), "weeks", "chart")!;
+    expect(c).toMatchObject({ kind: "bar", caption: "Opened and done, by week", summary: { label: "Open", value: "5", detail: "+6 this week" } });
+    const data = c.data as Array<Record<string, unknown>>;
+    expect(data).toHaveLength(8);
+    expect(data[7]).toEqual({ label: "This week", opened: 7, done: 1 });
+    expect(data[0]).toEqual({ label: "Aug 31", opened: 0, done: 0 });
   });
 
   it("pages each group on its own: 15 a page, ?<group>=n, the list saying where it is", () => {
@@ -131,7 +157,7 @@ describe("Work page", () => {
   });
 
   it("says so when there's nothing", () => {
-    expect(page(view(emptyState()), { path: "" }).sections).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] }]);
+    expect(page(view(emptyState()), { path: "" }).sections.slice(1)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] }]);
   });
 });
 
