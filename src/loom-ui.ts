@@ -36,8 +36,8 @@ export interface Page { title: string; intro?: string; sections: Section[]; /** 
 export const NOT_FOUND: Page = { title: "Not found", sections: [] };
 
 const MAX_ASKS = 10;
-const LIST_SHOWN = 50;
 const HISTORY_SHOWN = 100;
+const MAX_ITEMS = 200; // the contract's rows a list
 const MAX_STR = 2000; // the contract's per-string limit
 const TITLE_MAX = 300;
 const PROSE_MAX = 20000; // the contract's prose limit
@@ -172,8 +172,9 @@ function shownOf(shown: number, total: number): Block {
   return { type: "text", text: `Shown ${shown} of ${total}.`, tone: "muted" };
 }
 
-const SHOWS = ["", "blocked", "done"];
 const DONE_DAYS = 7;
+/** A group's rows a page at a time, loom's own page size; each group its own `?<id>=<n>`. */
+const GROUP_SHOWN = 15;
 const AGENT_ID = /^[a-z][a-z0-9-]{0,39}$/;
 /** An assignee that looks like an agent id: loom draws its mark (an unknown id draws nothing). */
 const agentOf = (who?: string) => (who && AGENT_ID.test(who) ? { agent: who } : {});
@@ -181,77 +182,56 @@ const agentOf = (who?: string) => (who && AGENT_ID.test(who) ? { agent: who } : 
 const whoOf = (v: UiView, who: string) => (v.owner && who === v.owner ? { avatar: who.slice(0, 1).toUpperCase() } : agentOf(who));
 
 /**
- * Work, per the board: Open · Blocked · Done counts, the same three as pills,
- * then the rows — the owner's own first (waiting on you), then in progress,
- * then ready in priority order. `priority` still narrows, as before.
+ * Work, in groups (Jonathan, 2026-10-31: "break the list of tasks into groups ... logical groupings"; the
+ * Open · Blocked · Done counts and pills went): waiting on you, in progress, blocked, then the ready queue by
+ * how much it matters (up next: urgent and high; ready: normal; later: low and someday), and the last week's
+ * done folded at the foot. Each task once, in the first group it fits; an empty group isn't drawn.
  */
 export function workPage(v: UiView, query: Record<string, unknown>): Page {
-  const show = typeof query.show === "string" && SHOWS.includes(query.show) ? query.show : "";
-  const pq = typeof query.priority === "string" && PRIORITIES.includes(query.priority) ? Number(query.priority) : undefined;
-  const at = pq === undefined ? "" : `, ${priorityMeta(pq).toLowerCase()}`;
-  const byP = (t: Task) => pq === undefined || t.priority === pq;
-  const open = v.tasks.filter((t) => t.status !== "closed");
-  const blocked = open.filter((t) => t.status === "open" && isBlocked(v, t.id));
+  const seen = new Set<string>();
+  const take = (t: Task) => (seen.has(t.id) ? false : (seen.add(t.id), true));
+  const tasks = new Map(v.tasks.map((t) => [t.id, t]));
+  const ready = v.ready.map((e) => tasks.get(e.id)).filter((t): t is Task => !!t);
+  const blockers = (t: Task) => v.links.filter((l) => l.type === "blocks" && l.id === t.id && tasks.get(l.dependsOn)?.status !== "closed").map((l) => l.dependsOn);
   const since = v.now.getTime() - DONE_DAYS * 86_400_000;
   const done = v.tasks.filter((t) => t.status === "closed" && t.closedAt && Date.parse(t.closedAt) >= since)
     .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
-  const mine = ownersCall(v);
 
-  const sections: Section[] = [{
-    id: "summary",
-    blocks: [
-      { type: "stats", items: [
-        { label: "Open", value: String(open.length - blocked.length), page: "" },
-        { label: "Blocked", value: String(blocked.length), ...(blocked.length ? { tone: "warn" } : {}), page: "?show=blocked" },
-        { label: `Done · ${DONE_DAYS}d`, value: String(done.length), page: "?show=done" },
-      ] },
-      { type: "filters", param: "show", options: [{ value: "", label: "Open" }, { value: "blocked", label: "Blocked" }, { value: "done", label: "Done" }] },
-    ],
-  }];
-
-  const row = (t: Task, meta: string, tone?: string) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip(`${cap(meta)} · ${priorityMeta(t.priority)} · ${t.id}`), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
+  const row = (t: Task, meta: Array<string | false | undefined>, tone?: string) => ({
+    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...(tone ? { tone } : {}), ...agentOf(t.assignee), ...taskLink(t.id),
   });
-  // A page of LIST_SHOWN at a time: ?page=<n> (from 1), the list saying where it is so loom draws the pager
-  // (loom docs/extensions.md, "pages"). The filters ride along: loom keeps the page's other query keys.
-  const want = Number(typeof query.page === "string" ? query.page : 1);
-  const list = (id: string, title: string | undefined, all: Array<Record<string, unknown>>, empty: string) => {
-    const count = Math.max(1, Math.ceil(all.length / LIST_SHOWN));
+  const pri = (t: Task) => priorityWord(t.priority);
+  const sections: Section[] = [];
+  const group = (id: string, title: string, rows: Array<Record<string, unknown>>, tone?: string) => {
+    if (!rows.length) return;
+    const count = Math.ceil(rows.length / GROUP_SHOWN);
+    const want = Number(typeof query[id] === "string" ? query[id] : 1);
     const at = Number.isInteger(want) && want >= 1 && want <= count ? want : 1;
-    const items = all.slice((at - 1) * LIST_SHOWN, at * LIST_SHOWN);
+    const items = rows.slice((at - 1) * GROUP_SHOWN, at * GROUP_SHOWN);
     sections.push({
-      id, ...(title ? { title } : {}),
-      blocks: items.length ? [{ type: "list", items, ...(count > 1 ? { pages: { param: "page", at, count, total: all.length } } : {}) }] : [{ type: "text", text: empty, tone: "muted" }],
+      id, title: `${title} · ${rows.length}`, ...(tone ? { tone } : {}),
+      blocks: [{ type: "list", items, ...(count > 1 ? { pages: { param: id, at, count, total: rows.length } } : {}) }],
     });
   };
 
-  if (show === "blocked") {
-    const rows = blocked.filter(byP).map((t) => {
-      const on = v.links.filter((l) => l.type === "blocks" && l.id === t.id && v.tasks.find((x) => x.id === l.dependsOn)?.status !== "closed").map((l) => l.dependsOn);
-      return row(t, `blocked by ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, "muted");
-    });
-    list("blocked", `Blocked${at}`, rows, `Nothing blocked${at}.`);
-  } else if (show === "done") {
-    const rows = done.filter(byP).map((t) => row(t, `done ${humanDate(t.closedAt, v.now, v.timeZone)}`, "ok"));
-    list("done", `Done in the last ${DONE_DAYS} days${at}`, rows, `Nothing done in the last ${DONE_DAYS} days${at}.`);
-  } else {
-    const seen = new Set<string>();
-    const take = (t: Task) => (seen.has(t.id) ? false : (seen.add(t.id), true));
-    const yours = mine.filter(byP).filter(take).map((t) => row(t, "waiting on you", "warn"));
-    const doing = inProgress(v).filter(byP).filter(take).map((t) => row(t, `working on it${t.assignee ? ` · ${t.assignee}` : ""}`));
-    const tasks = new Map(v.tasks.map((t) => [t.id, t]));
-    const ready = v.ready.filter((e) => pq === undefined || e.priority === pq).map((e) => tasks.get(e.id)).filter((t): t is Task => !!t).filter(take)
-      .map((t) => row(t, "ready"));
-    const all = [...yours, ...doing, ...ready];
-    list("open", pq === undefined ? undefined : `Open${at}`, all, `Nothing open${at}.`);
+  group("yours", "Waiting on you", ownersCall(v).filter(take).map((t) => row(t, [pri(t), t.id])), "warn");
+  group("doing", "In progress", inProgress(v).filter(take).map((t) => row(t, [t.assignee, pri(t), t.id])));
+  const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
+  group("blocked", "Blocked", blocked.filter(take).map((t) => {
+    const on = blockers(t);
+    return row(t, [`Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id], "muted");
+  }));
+  group("next", "Up next", ready.filter((t) => t.priority <= 1).filter(take).map((t) => row(t, [pri(t), t.id])));
+  group("ready", "Ready", ready.filter((t) => t.priority === 2).filter(take).map((t) => row(t, [t.id])));
+  group("later", "Later", ready.filter((t) => t.priority >= 3).filter(take).map((t) => row(t, [pri(t), t.id], "muted")));
+  if (done.length) {
+    sections.push({ id: "done", blocks: [{ type: "details", summary: `Done in the last ${DONE_DAYS} days`, blocks: [
+      { type: "list", items: done.slice(0, MAX_ITEMS).map((t) => row(t, [`Done ${humanDate(t.closedAt, v.now, v.timeZone)}`, t.id], "ok")) },
+    ] }] });
   }
+  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] });
 
-  return {
-    title: "Tasks",
-    add: { page: "new", label: "New task" },
-    intro: show === "blocked" ? "Waiting on something else first." : show === "done" ? "What got finished lately." : "What's waiting on you, what's moving, and what's ready next.",
-    sections,
-  };
+  return { title: "Tasks", add: { page: "new", label: "New task" }, sections };
 }
 
 function isBlocked(v: UiView, id: string): boolean {

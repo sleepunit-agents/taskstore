@@ -86,52 +86,52 @@ describe("manifest", () => {
 });
 
 describe("Work page", () => {
-  it("is the board's Tasks: Open · Blocked · Done counts and pills, then yours, in progress, ready", () => {
+  it("is groups, each task once: waiting on you, in progress, blocked, up next; no counts or pills", () => {
     const p = page(view(base()), { path: "", query: {} });
     expect(p.title).toBe("Tasks");
-    expect(block(p, "summary", "stats")!.items!.map((i) => [i.label, i.value])).toEqual([["Open", "5"], ["Blocked", "1"], ["Done · 7d", "1"]]);
-    expect(block(p, "summary", "stats")!.items![1]).toMatchObject({ tone: "warn", page: "?show=blocked" });
-    expect(block(p, "summary", "filters")).toMatchObject({ param: "show", options: [{ value: "", label: "Open" }, { value: "blocked", label: "Blocked" }, { value: "done", label: "Done" }] });
-    const items = block(p, "open", "list")!.items!;
-    // The owner's first (waiting on you), then the rest in progress, then ready; each once.
-    expect(items.map((i) => [i.page, i.tone ?? ""])).toEqual([["task/t-4", "warn"], ["task/t-3", "warn"], ["task/t-1", ""], ["task/t-2", ""]]);
-    expect(items[0]).toMatchObject({ text: "owner doing", meta: "Waiting on you · Normal priority · t-4", agent: "jonathan" });
-    expect(items[2]).toMatchObject({ meta: "Working on it · art · High priority · t-1", agent: "art" });
-    expect(items[3]).toMatchObject({ meta: "Ready · Urgent priority · t-2" });
-    expect(items[3]).not.toHaveProperty("agent");
+    expect(p.sections.map((s) => [s.id, s.title])).toEqual([
+      ["yours", "Waiting on you · 2"], ["doing", "In progress · 1"], ["blocked", "Blocked · 1"], ["next", "Up next · 1"], ["done", undefined],
+    ]);
+    expect(section(p, "yours")!.tone).toBe("warn");
+    expect(block(p, "yours", "list")!.items!.map((i) => i.page)).toEqual(["task/t-4", "task/t-3"]);
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "Normal · t-4", agent: "jonathan" });
+    expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "art · High · t-1", agent: "art", page: "task/t-1" }]);
+    expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Waiting on t-1 · Normal · t-6", tone: "muted", page: "task/t-6" }]);
+    expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Urgent · t-2", page: "task/t-2" }]);
+    expect(p.sections.some((s) => s.blocks.some((b) => b.type === "stats" || b.type === "filters"))).toBe(false);
   });
 
-  it("Blocked names what each waits on; Done is the last week, newest first", () => {
-    const b = page(view(base()), { path: "", query: { show: "blocked" } });
-    expect(block(b, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Blocked by t-1 · Normal priority · t-6", tone: "muted", page: "task/t-6" }]);
-    const d = page(view(base()), { path: "", query: { show: "done" } });
-    expect(block(d, "done", "list")!.items!.map((i) => i.page)).toEqual(["task/t-5"]);
-    expect(block(d, "done", "list")!.items![0]).toMatchObject({ tone: "ok", meta: "Done 12:09 PM · High priority · t-5" });
+  it("splits the ready queue by priority: up next (urgent, high), ready (normal), later (low, someday)", () => {
+    const s = state([0, 1, 2, 3, 4].map((priority) => ({ op: "create", title: `p${priority}`, priority })));
+    const p = page(view(s, ""), { path: "" });
+    const of = (id: string) => block(p, id, "list")!.items!.map((i) => i.text);
+    expect([of("next"), of("ready"), of("later")]).toEqual([["p0", "p1"], ["p2"], ["p3", "p4"]]);
+    expect(section(p, "later")!.blocks[0]).toMatchObject({ items: [{ tone: "muted" }, { tone: "muted" }] });
+    expect(block(p, "ready", "list")!.items![0].meta).toBe("t-3");
   });
 
-  it("priority still narrows, and a bad filter value is ignored", () => {
-    const p = page(view(base()), { path: "", query: { priority: "3" } });
-    expect(section(p, "open")!.title).toBe("Open, low priority");
-    expect(block(p, "open", "list")!.items!.map((i) => i.page)).toEqual(["task/t-3"]);
-    expect(section(page(view(base()), { path: "", query: { priority: "9", show: "nope" } }), "open")!.title).toBeUndefined();
+  it("folds the last week's done at the foot, newest first", () => {
+    const d = section(page(view(base()), { path: "" }), "done")!.blocks[0] as Blk;
+    expect(d).toMatchObject({ type: "details", summary: "Done in the last 7 days" });
+    const items = (d.blocks as Blk[])[0].items!;
+    expect(items.map((i) => i.page)).toEqual(["task/t-5"]);
+    expect(items[0]).toMatchObject({ tone: "ok", meta: "Done 12:09 PM · t-5" });
   });
 
-  it("pages past the cap: 50 a page, ?page=n, and the list says where it is (loom draws the pager)", () => {
-    const s = state(Array.from({ length: 60 }, (_, i) => ({ op: "create", title: `x${i}`, priority: 1 })));
+  it("pages each group on its own: 15 a page, ?<group>=n, the list saying where it is", () => {
+    const s = state(Array.from({ length: 20 }, (_, i) => ({ op: "create", title: `x${i}`, priority: 2 })));
     const p1 = page(view(s), { path: "" });
-    expect(block(p1, "open", "list")!.items).toHaveLength(50);
-    expect(block(p1, "open", "list")!.pages).toEqual({ param: "page", at: 1, count: 2, total: 60 });
-    const p2 = page(view(s), { path: "", query: { page: "2" } });
-    expect(block(p2, "open", "list")!.items).toHaveLength(10);
-    expect(block(p2, "open", "list")!.pages).toMatchObject({ at: 2, count: 2 });
-    // Page 2 is the rest: nothing on both.
-    const titles = (p: ReturnType<typeof page>) => block(p, "open", "list")!.items!.map((i) => i.text);
-    expect(titles(p2).some((t) => titles(p1).includes(t))).toBe(false);
-    // A page past the end, or not a page at all, is the first.
-    expect(block(page(view(s), { path: "", query: { page: "9" } }), "open", "list")!.pages).toMatchObject({ at: 1 });
-    expect(block(page(view(s), { path: "", query: { page: "two" } }), "open", "list")!.pages).toMatchObject({ at: 1 });
-    // One page's worth says nothing about pages.
-    expect(block(page(view(base()), { path: "" }), "open", "list")!.pages).toBeUndefined();
+    expect(section(p1, "ready")!.title).toBe("Ready · 20");
+    expect(block(p1, "ready", "list")!.items).toHaveLength(15);
+    expect(block(p1, "ready", "list")!.pages).toEqual({ param: "ready", at: 1, count: 2, total: 20 });
+    const p2 = page(view(s), { path: "", query: { ready: "2" } });
+    expect(block(p2, "ready", "list")!.items).toHaveLength(5);
+    expect(block(page(view(s), { path: "", query: { ready: "9" } }), "ready", "list")!.pages).toMatchObject({ at: 1 });
+    expect(block(page(view(base()), { path: "" }), "next", "list")!.pages).toBeUndefined();
+  });
+
+  it("says so when there's nothing", () => {
+    expect(page(view(emptyState()), { path: "" }).sections).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] }]);
   });
 });
 
@@ -175,8 +175,8 @@ describe("task page", () => {
   it("never emits a link a page path can't carry", () => {
     const s = state([{ op: "import", tasks: [{ id: "BD-1", title: "legacy", type: "task", status: "open", priority: 1, createdAt: AT, createdBy: "art", comments: [] }], links: [] }]);
     const m = manifest(view(s));
-    const items = block(page(view(s), { path: "" }), "open", "list")!.items!;
-    expect(items[0]).toEqual({ text: "legacy", meta: "Ready · High priority · BD-1" });
+    const items = block(page(view(s), { path: "" }), "next", "list")!.items!;
+    expect(items[0]).toEqual({ text: "legacy", meta: "High · BD-1" });
     expect(m.tile.value).toBe("0 in progress");
   });
 
