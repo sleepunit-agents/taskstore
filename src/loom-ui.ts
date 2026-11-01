@@ -263,8 +263,9 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const done = v.tasks.filter((t) => t.status === "closed" && t.closedAt && Date.parse(t.closedAt) >= since)
     .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
 
-  const row = (t: Task, meta: Array<string | false | undefined>, tone?: string) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...(tone ? { tone } : {}), ...whoOf(v, t.assignee), ...taskLink(t.id),
+  // No tone dot on a row: its group already says whether it's blocked, later or done (Jonathan, 2026-10-31).
+  const row = (t: Task, meta: Array<string | false | undefined>) => ({
+    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
   });
   const who = (t: Task) => nameOf(v, t.assignee);
   const pri = (t: Task) => priorityWord(t.priority);
@@ -289,13 +290,13 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
   group("blocked", "Blocked", blocked.filter(take).map((t) => {
     const on = blockers(t);
-    return row(t, [`Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id], "muted");
+    return row(t, [who(t), `Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id]);
   }));
   group("next", "Up next", ready.filter((t) => t.priority <= 1).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
   group("ready", "Ready", ready.filter((t) => t.priority === 2).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
-  group("later", "Later", ready.filter((t) => t.priority >= 3).filter(take).map((t) => row(t, [who(t), pri(t), t.id], "muted")), undefined, "closed");
+  group("later", "Later", ready.filter((t) => t.priority >= 3).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
   group("done", `Done in the last ${DONE_DAYS} days`, done
-    .map((t) => row(t, [who(t), `Done ${humanDate(t.closedAt, v.now, v.timeZone)}`, t.id], "ok")), undefined, "closed");
+    .map((t) => row(t, [who(t), pri(t), t.id, humanDate(t.closedAt, v.now, v.timeZone)])), undefined, "closed");
   if (sections.length === 1) sections.push({ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] });
 
   return { title: "Tasks", add: { page: "new", label: "New task" }, sections };
