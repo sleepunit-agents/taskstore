@@ -56,6 +56,12 @@
         "label": "When the owner comments from the page",
         "hint": "a command as a JSON array, \"{id}\" for the task, e.g. a wake for the agent; the task also goes back to the first of TASKSTORE_AGENTS"
       }
-    ]
+    ],
+    "sections": {
+      "project": {
+        "label": "Tasks",
+        "argv": ["loom-tasks", "project-feed", "--json"]
+      }
+    }
   }
 }
