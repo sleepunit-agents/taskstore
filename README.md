@@ -24,6 +24,12 @@ It reads `TASKSTORE_DB` (which must already exist), `TASKSTORE_OWNER` (whose
 call an ask is and who a comment from the page is posted as; unset, there are
 no asks and comments are posted as `loom-page`) and `TZ` for dates.
 
+In a loom project's hub it adds the Tasks section: `loom-tasks project-feed
+--json` (declared as the package's `loom.sections.project`, `src/project-feed.ts`)
+answers the `--epic` task's tree in four groups (waiting on the owner, ready,
+blocked, done since `--since`), plus open tasks outside the tree that name the
+project, each item citing any `dg-…` conversation digest its description does.
+
 Over loom's piece API (`POST /api/tasks/run`, body `{"argv": ["ready"]}`) a body
 that isn't on loom's machine, such as a house, runs any CLI command against the
 one store and gets back `{exit, stdout, stderr}`: the same JSON and exit codes

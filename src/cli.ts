@@ -18,6 +18,9 @@
 //   taskstore import <payload.json>
 //   taskstore ui [page|act] --json   (loom's page; see src/loom-ui.ts)
 //   taskstore api --json             (loom's piece API; see src/loom-api.ts)
+//   taskstore project-feed --json --project <slug> --since <iso> [--epic <id>]
+//                    [--name <alias>]... [--venue <v>]...
+//                                    (loom's project hub; see src/project-feed.ts)
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
@@ -29,6 +32,7 @@ import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
 import { checkAct, manifest, page, type ReadyEntry, type UiView } from "./loom-ui.js";
 import { answer, type ApiRequest } from "./loom-api.js";
+import { feed, parseFeedArgs } from "./project-feed.js";
 import { spawn, spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
@@ -363,6 +367,32 @@ if (verb === "ui") {
   }
   uiStore.close();
   // Written in full, then exit: the rest of this file is the command path.
+  writeAll(JSON.stringify(out) + "\n");
+  process.exit(0);
+}
+
+// `project-feed`: the tasks section of a loom project's hub (src/project-feed.ts,
+// loom docs/specs/projects.md "Section feeds"). A read, of a store that already
+// exists (as `ui`: loom runs it from its own working directory). Its own
+// argument parser, since --name and --venue repeat.
+if (verb === "project-feed") {
+  const args = parseFeedArgs(argv);
+  if (typeof args === "string") {
+    console.error(`taskstore project-feed: ${args}`);
+    process.exit(2);
+  }
+  if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
+    console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
+    process.exit(1);
+  }
+  const feedStore = new SqliteStore(dbPath);
+  const all = feedStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
+  const ready = feedStore.run({ op: "ready" }) as { entries?: ReadyEntry[] };
+  feedStore.close();
+  const out = feed(
+    { tasks: all.tasks ?? [], links: all.links ?? [], ready: ready.entries ?? [], owner: process.env.TASKSTORE_OWNER?.trim() || "" },
+    args,
+  );
   writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
 }
