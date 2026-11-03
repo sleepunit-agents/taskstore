@@ -172,6 +172,8 @@ export function page(v: UiView, req: unknown): Page {
 }
 
 const PRIORITIES = ["0", "1", "2", "3", "4"];
+/** A task cited the way loom pages cite each other: [[t-124]]. */
+const TASK_REF = /\[\[(t-\d+)\]\]/g;
 const PERSON = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** loom's caller (docs/extensions.md, "caller"): a household owner, by their People slug; anyone else isn't "you". */
@@ -313,41 +315,61 @@ export function taskPage(v: UiView, id: string): Page {
   const title = (tid: string) => v.tasks.find((x) => x.id === tid)?.title;
 
   const status = t.status === "open" && isBlocked(v, t.id) ? "Open (blocked)" : statusWords(t.status);
-  const kv: Array<Record<string, string>> = [
-    { label: "status", value: status },
-    { label: "priority", value: priorityWord(t.priority) },
-    ...(t.type !== "task" ? [{ label: "type", value: t.type }] : []),
-    { label: "assignee", value: clip(nameOf(v, t.assignee) ?? "nobody") },
-    { label: "opened", value: clip(`${date(t.createdAt)} by ${t.createdBy}`) },
-    ...(t.startedAt ? [{ label: "started", value: date(t.startedAt) }] : []),
-    ...(t.closedAt ? [{ label: "closed", value: clip(`${date(t.closedAt)}${t.closeReason ? ` (${t.closeReason})` : ""}`) }] : []),
+  // The task's facts as an app's panel (Jonathan, 2026-11-03: "app panels, not web forms"): each row says the value
+  // in words; priority changes in place (a segmented control); links go to the tasks they name; the raw refs sit
+  // behind one row's sheet.
+  const rows: Array<Record<string, unknown>> = [
+    { label: "Status", value: status, ...(t.status === "closed" ? { tone: "ok" } : t.status === "in_progress" ? { tone: "warn" } : {}) },
+    PRIORITIES.includes(String(t.priority))
+      // In a sheet: five segments don't fit beside the label in the side column (they squeezed it to a letter a line).
+      ? { label: "Priority", value: priorityWord(t.priority),
+          edit: { action: "priority", title: "Priority", submit: "Set", hidden: { id: t.id },
+            fields: [{ name: "priority", label: "How urgent", kind: "segmented", value: String(t.priority),
+              options: PRIORITIES.map((value) => ({ value, label: priorityWord(Number(value)) })) }] } }
+      : { label: "Priority", value: priorityWord(t.priority) },
+    ...(t.type !== "task" ? [{ label: "Kind", value: cap(t.type) }] : []),
+    { label: "Whose", value: clip(nameOf(v, t.assignee) ?? "Nobody's yet"), ...(t.assignee !== v.owner ? agentOf(t.assignee) : {}) },
+    { label: "Opened", value: date(t.createdAt), detail: clip(`by ${t.createdBy}`) },
+    ...(t.startedAt ? [{ label: "Started", value: date(t.startedAt) }] : []),
+    ...(t.closedAt ? [{ label: "Closed", value: date(t.closedAt), ...(t.closeReason ? { detail: clip(t.closeReason) } : {}) }] : []),
   ];
   const parent = v.links.find((l) => l.type === "parent-child" && l.id === t.id)?.dependsOn;
-  if (parent) kv.push({ label: "parent", value: clip(`${parent} ${title(parent) ?? ""}`.trim(), TITLE_MAX), ...taskLink(parent) });
+  if (parent) rows.push({ label: "Part of", value: clip(title(parent) ?? parent, TITLE_MAX), detail: parent, ...taskLink(parent) });
   const deps = v.links.filter((l) => l.type === "blocks" && l.id === t.id).map((l) => l.dependsOn);
   for (const d of deps.slice(0, 20)) {
     const dt = v.tasks.find((x) => x.id === d);
-    kv.push({ label: "depends on", value: clip(`${d}${dt ? ` ${dt.title}` : ""}${dt?.status === "closed" ? " (closed)" : ""}`, TITLE_MAX), ...taskLink(d) });
+    rows.push({ label: "Waits on", value: clip(dt?.title ?? d, TITLE_MAX), detail: `${d}${dt?.status === "closed" ? " · done" : ""}`,
+      tone: dt?.status === "closed" ? "ok" : "warn", ...taskLink(d) });
   }
-  if (deps.length > 20) kv.push({ label: "depends on", value: `and ${deps.length - 20} more` });
-  for (const [label, val] of [["spec item", t.specItemRef], ["criterion", t.criterionId], ["legacy ref", t.legacyRef]] as const)
-    if (val) kv.push({ label, value: clip(val) });
+  if (deps.length > 20) rows.push({ label: "Waits on", value: `and ${deps.length - 20} more` });
+  const record = [["Task", t.id], ["Spec item", t.specItemRef], ["Criterion", t.criterionId], ["Legacy ref", t.legacyRef]] as const;
+  rows.push({ label: "Record", value: "Its ids and refs", sheet: { title: t.id, blocks: [{ type: "kv",
+    items: record.filter(([, val]) => val).map(([label, val]) => ({ label, value: clip(val as string) })) }] } });
+
+  // Tasks cite each other as [[t-NNN]], which loom's prose would read as a knowledge page (a dead link): they read
+  // as plain t-NNN, and the ones that exist are listed under Mentioned, linked to their own pages.
+  const mentioned: string[] = [];
+  const unlink = (s: string) => s.replace(TASK_REF, (_, id: string) => {
+    if (id !== t.id && !mentioned.includes(id) && v.tasks.some((x) => x.id === id)) mentioned.push(id);
+    return id;
+  });
+  const description = t.description ? unlink(t.description) : "";
+  const comments = t.comments.slice(-HISTORY_SHOWN).map((c) => ({ ...c, text: unlink(c.text) }));
 
   const yours = v.owner !== "" && t.status !== "closed" && t.assignee === v.owner;
   // The board's Task: the ask (if it's yours), the description as written
   // (markdown, a prose block), then Mark done — or Reopen once it's closed.
   const main: Block[] = [
     ...(yours ? [{ type: "callout", title: "Waiting on you", text: "Your answer goes in the reply below; it's picked up from there.", tone: "warn" }] : []),
-    t.description ? { type: "prose", text: t.description.slice(0, PROSE_MAX) } : { type: "text", text: "No description.", tone: "muted" },
+    description ? { type: "prose", text: description.slice(0, PROSE_MAX) } : { type: "text", text: "No description.", tone: "muted" },
     { type: "buttons", items: [t.status === "closed"
       ? { action: "reopen", label: "Reopen", fields: { id: t.id } }
       : { action: "close", label: "Mark done", tone: "primary", fields: { id: t.id } }] },
   ];
 
-  const comments = t.comments.slice(-HISTORY_SHOWN);
   const history: Block[] = comments.length
     ? [
-      { type: "list", items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor === PAGE_ACTOR ? "loom" : nameOf(v, c.actor)} · ${date(c.at)}`), ...whoOf(v, c.actor) })) },
+      { type: "list", wrap: true, items: comments.map((c) => ({ text: clip(c.text), meta: clip(`${c.actor === PAGE_ACTOR ? "loom" : nameOf(v, c.actor)} · ${date(c.at)}`), ...whoOf(v, c.actor) })) },
       ...(t.comments.length > comments.length ? [shownOf(comments.length, t.comments.length)] : []),
     ]
     : [{ type: "text", text: "No comments yet.", tone: "muted" }];
@@ -357,13 +379,17 @@ export function taskPage(v: UiView, id: string): Page {
     intro: `${status} · ${priorityMeta(t.priority)} · ${t.id}`,
     sections: [
       { id: "task", blocks: main },
+      ...(mentioned.length ? [{ id: "mentioned", title: "Mentioned", blocks: [{ type: "list", items: mentioned.slice(0, 50).map((id) => {
+        const m = v.tasks.find((x) => x.id === id)!;
+        return { text: clip(m.title, TITLE_MAX), meta: `${id} · ${m.status === "open" && isBlocked(v, id) ? "Open (blocked)" : statusWords(m.status)}`, ...whoOf(v, m.assignee), ...taskLink(id) };
+      }) }] }] : []),
       { id: "comments", title: "Comments", blocks: history },
       { id: "reply", blocks: [{
         type: "form", action: "comment", title: "Reply", submit: "Send",
         hidden: { id: t.id },
         fields: [{ name: "text", label: yours ? "Your call" : "Reply", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
       }] },
-      { id: "facts", side: true, blocks: [{ type: "kv", items: kv }] },
+      { id: "facts", side: true, blocks: [{ type: "panel", rows }] },
     ],
   };
 }
@@ -392,6 +418,7 @@ export type ActCheck =
   | { ok: true; action: "create"; title: string; priority: number; description?: string; mine: boolean }
   | { ok: true; action: "comment"; id: string; text: string }
   | { ok: true; action: "close" | "reopen"; id: string }
+  | { ok: true; action: "priority"; id: string; priority: number }
   | { ok: false; message: string };
 
 /** Validate a `ui act` request: comment, close (Mark done), reopen (its Undo). loom passes fields through unchecked. */
@@ -406,12 +433,17 @@ export function checkAct(v: UiView, req: unknown): ActCheck {
     const description = typeof f.description === "string" && f.description.trim() ? f.description.trim().slice(0, COMMENT_MAX) : undefined;
     return { ok: true, action: "create", title, priority, ...(description ? { description } : {}), mine: f.mine === "1" && v.owner !== "" };
   }
-  if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen") return { ok: false, message: "taskstore doesn't know that action." };
+  if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen" && req.action !== "priority") return { ok: false, message: "taskstore doesn't know that action." };
   const fields = isObj(req.fields) ? req.fields : {};
   const id = fields.id;
   const task = typeof id === "string" ? v.tasks.find((t) => t.id === id) : undefined;
   if (typeof id !== "string" || !task) return { ok: false, message: "That task doesn't exist." };
   if (req.action === "close") return task.status === "closed" ? { ok: false, message: "It's already done." } : { ok: true, action: "close", id };
+  if (req.action === "priority") {
+    const p = fields.priority;
+    if (typeof p !== "string" || !PRIORITIES.includes(p)) return { ok: false, message: "That isn't a priority." };
+    return { ok: true, action: "priority", id, priority: Number(p) };
+  }
   if (req.action === "reopen") return task.status !== "closed" ? { ok: false, message: "It isn't closed." } : { ok: true, action: "reopen", id };
   const text = typeof fields.text === "string" ? fields.text.trim() : "";
   if (!text) return { ok: false, message: "The comment is empty." };

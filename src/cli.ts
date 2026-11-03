@@ -30,7 +30,7 @@ import Database from "better-sqlite3";
 import { dirname, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
-import { checkAct, manifest, page, type ReadyEntry, type UiView } from "./loom-ui.js";
+import { checkAct, manifest, page, priorityWord, type ReadyEntry, type UiView } from "./loom-ui.js";
 import { answer, type ApiRequest } from "./loom-api.js";
 import { feed, parseFeedArgs } from "./project-feed.js";
 import { spawn, spawnSync } from "node:child_process";
@@ -355,6 +355,12 @@ if (verb === "ui") {
       out = r.ok === true
         ? { ok: true, message, page: `task/${check.id}` }
         : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
+    } else if (check.action === "priority") {
+      // The facts panel's segmented control: the priority, in place.
+      const r = uiStore.run({ op: "update", id: check.id, set: { priority: check.priority }, actor: owner || "loom-page", at: new Date().toISOString() } as Command);
+      out = r.ok === true
+        ? { ok: true, message: `${check.id} is ${priorityWord(check.priority).toLowerCase()} priority now.`, page: `task/${check.id}` }
+        : { ok: false, message: `That didn't take (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
     } else {
       // Mark done, and its Undo (loom's ActResult.undo): reopen.
       const r = uiStore.run({ op: check.action, id: check.id, actor: owner || "loom-page", at: new Date().toISOString() } as Command);
