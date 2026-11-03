@@ -30,6 +30,8 @@ type Blk = { type: string; items?: Array<Record<string, unknown>>; text?: string
 const section = (p: ReturnType<typeof page>, id: string) => p.sections.find((s) => s.id === id);
 const block = (p: ReturnType<typeof page>, id: string, type: string) =>
   section(p, id)?.blocks.find((b) => b.type === type) as Blk | undefined;
+/** The task's facts panel's rows. */
+const rows = (p: ReturnType<typeof page>) => block(p, "facts", "panel")!.rows as Array<Record<string, unknown>>;
 
 // t-1 p1 in progress (art); t-2 p0 ready; t-3 p3 open, the owner's;
 // t-4 p2 in progress, the owner's; t-5 p1 closed, the owner's (not an ask);
@@ -135,7 +137,7 @@ describe("Work page", () => {
       expect(block(page(view(base()), { path: "", caller }), "yours", "list")!.items![0]).toMatchObject({ meta: "jonathan · Normal · t-4", avatar: "J" });
     }
     const t = page(view(base()), { path: "task/t-4", caller: owner });
-    expect(block(t, "facts", "kv")!.items!.find((i) => i.label === "assignee")).toEqual({ label: "assignee", value: "you" });
+    expect(rows(t).find((i) => i.label === "Whose")).toEqual({ label: "Whose", value: "you" });
   });
 
   it("charts what was opened and done each week, the last 8, this one last", () => {
@@ -169,17 +171,21 @@ describe("task page", () => {
     const p = page(view(base()), { path: "task/t-6", query: {} });
     expect(p.title).toBe("blocked");
     expect(p.intro).toBe("Open (blocked) · Normal priority · t-6");
-    expect(block(p, "facts", "kv")!.items).toEqual([
-      { label: "status", value: "Open (blocked)" },
-      { label: "priority", value: "Normal" },
-      { label: "assignee", value: "nobody" },
-      { label: "opened", value: "12:09 PM by art" },
-      { label: "parent", value: "t-7 an epic", page: "task/t-7" },
-      { label: "depends on", value: "t-1 doing one", page: "task/t-1" },
+    // The facts are an app's panel: each value in words, priority in a sheet, linked tasks by title, ids behind a sheet.
+    const options = ["Urgent", "High", "Normal", "Low", "Someday"].map((label, i) => ({ value: String(i), label }));
+    expect(rows(p)).toEqual([
+      { label: "Status", value: "Open (blocked)" },
+      { label: "Priority", value: "Normal", edit: { action: "priority", title: "Priority", submit: "Set", hidden: { id: "t-6" },
+        fields: [{ name: "priority", label: "How urgent", kind: "segmented", value: "2", options }] } },
+      { label: "Whose", value: "Nobody's yet" },
+      { label: "Opened", value: "12:09 PM", detail: "by art" },
+      { label: "Part of", value: "an epic", detail: "t-7", page: "task/t-7" },
+      { label: "Waits on", value: "doing one", detail: "t-1", tone: "warn", page: "task/t-1" },
+      { label: "Record", value: "Its ids and refs", sheet: { title: "t-6", blocks: [{ type: "kv", items: [{ label: "Task", value: "t-6" }] }] } },
     ]);
     expect(section(p, "facts")!.side).toBe(true);
     expect(block(p, "task", "buttons")!.items).toEqual([{ action: "close", label: "Mark done", tone: "primary", fields: { id: "t-6" } }]);
-    expect(block(p, "comments", "list")!.items).toEqual([{ text: "first note", meta: "art · 12:30 PM", agent: "art" }]);
+    expect(block(p, "comments", "list")).toEqual({ type: "list", wrap: true, items: [{ text: "first note", meta: "art · 12:30 PM", agent: "art" }] });
     expect(block(p, "reply", "form")).toMatchObject({ action: "comment", title: "Reply", submit: "Send", hidden: { id: "t-6" }, fields: [{ name: "text", label: "Reply", kind: "textarea", required: true }] });
     expect(block(p, "task", "link")).toBeUndefined();   // loom's own back link does this now
   });
@@ -187,12 +193,29 @@ describe("task page", () => {
   it("the description is prose; the owner's task asks for their call; a closed one offers Reopen", () => {
     const one = page(view(base()), { path: "task/t-1" });
     expect(block(one, "task", "prose")).toEqual({ type: "prose", text: "Why and how." });
-    expect(block(one, "facts", "kv")!.items).toContainEqual({ label: "started", value: "12:09 PM" });
+    expect(rows(one)).toContainEqual({ label: "Started", value: "12:09 PM" });
     expect(block(one, "task", "callout")).toBeUndefined();
     const mine = page(view(base()), { path: "task/t-4" });
     expect(block(mine, "task", "callout")).toMatchObject({ title: "Waiting on you", tone: "warn" });
     expect(block(mine, "reply", "form")!.fields).toMatchObject([{ label: "Your call" }]);
     expect(block(page(view(base()), { path: "task/t-5" }), "task", "buttons")!.items).toEqual([{ action: "reopen", label: "Reopen", fields: { id: "t-5" } }]);
+  });
+
+  it("reads [[t-NNN]] as plain t-NNN (not a dead knowledge link) and lists the tasks it mentions, linked", () => {
+    const s = state([
+      { op: "create", title: "cites", description: "See [[t-2]], [[t-2]] again, [[t-9]] (gone), [[t-1]] (itself) and [[a-page]]." },
+      { op: "create", title: "the other one" },
+      { op: "create", title: "from a comment" },
+      { op: "comment", id: "t-1", text: "Also [[t-3]]." },
+    ]);
+    const p = page(view(s), { path: "task/t-1" });
+    expect(block(p, "task", "prose")!.text).toBe("See t-2, t-2 again, t-9 (gone), t-1 (itself) and [[a-page]].");
+    expect(block(p, "comments", "list")!.items![0].text).toBe("Also t-3.");
+    expect(block(p, "mentioned", "list")!.items).toEqual([
+      { text: "the other one", meta: "t-2 · Open", page: "task/t-2" },
+      { text: "from a comment", meta: "t-3 · Open", page: "task/t-3" },
+    ]);
+    expect(section(page(view(base()), { path: "task/t-1" }), "mentioned")).toBeUndefined();
   });
 
   it("answers Not found for an unknown id, an unknown path, and malformed requests", () => {
@@ -231,7 +254,7 @@ describe("humanDate", () => {
 
 describe("priority in words", () => {
   it("names 0..4 Urgent, High, Normal, Low, Someday; the New task form offers them by name", () => {
-    const words = [0, 1, 2, 3, 4].map((n) => block(page(view(state([{ op: "create", title: "x", priority: n }])), { path: "task/t-1" }), "facts", "kv")!.items![1].value);
+    const words = [0, 1, 2, 3, 4].map((n) => rows(page(view(state([{ op: "create", title: "x", priority: n }])), { path: "task/t-1" })).find((r) => r.label === "Priority")!.value);
     expect(words).toEqual(["Urgent", "High", "Normal", "Low", "Someday"]);
     const form = block(page(view(base()), { path: "new" }), "new", "form")!;
     expect((form.fields as Array<Record<string, unknown>>).find((f) => f.name === "priority")!.options)
@@ -245,6 +268,7 @@ describe("checkAct", () => {
     expect(checkAct(v, { action: "comment", path: "task/t-1", fields: { id: "t-1", text: "  go  " } })).toEqual({ ok: true, action: "comment", id: "t-1", text: "go" });
     expect(checkAct(v, { action: "close", fields: { id: "t-1" } })).toEqual({ ok: true, action: "close", id: "t-1" });
     expect(checkAct(v, { action: "reopen", fields: { id: "t-5" } })).toEqual({ ok: true, action: "reopen", id: "t-5" });
+    expect(checkAct(v, { action: "priority", fields: { id: "t-1", priority: "0" } })).toEqual({ ok: true, action: "priority", id: "t-1", priority: 0 });
   });
   it("refuses everything else with a message", () => {
     for (const req of [
@@ -258,6 +282,9 @@ describe("checkAct", () => {
       { action: "comment", fields: { id: "t-1", text: 5 } },
       { action: "comment", fields: { id: "t-1", text: "z".repeat(10001) } },
       { action: "comment", fields: "nope" },
+      { action: "priority", fields: { id: "t-1", priority: "7" } },
+      { action: "priority", fields: { id: "t-1" } },
+      { action: "priority", fields: { id: "t-999", priority: "1" } },
     ]) {
       const r = checkAct(v, req);
       expect(r.ok).toBe(false);
@@ -317,6 +344,12 @@ describe("taskstore ui (the CLI verbs)", () => {
     expect(json(run(["ui", "--json"])).asks).toEqual([]);
     expect(json(run(["ui", "act", "--json"], JSON.stringify({ action: "comment", path: "", fields: { id: "t-2", text: "from the page" } }))).ok).toBe(true);
     expect((JSON.parse(run(["show", "t-2"]).stdout).task as Task).comments.at(-1)).toMatchObject({ actor: "loom-page", text: "from the page" });
+  });
+
+  it("ui act --json: the facts panel's priority sets it through the core", () => {
+    const r = json(run(["ui", "act", "--json"], JSON.stringify({ action: "priority", path: "task/t-1", fields: { id: "t-1", priority: "0" } }), { TASKSTORE_OWNER: "gage" }));
+    expect(r).toEqual({ ok: true, message: "t-1 is urgent priority now.", page: "task/t-1" });
+    expect((JSON.parse(run(["show", "t-1"]).stdout).task as Task).priority).toBe(0);
   });
 
   it("ui act --json adds the comment as the owner through the core", () => {
