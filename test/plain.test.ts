@@ -61,7 +61,7 @@ describe("the CLI's plain-words policy", () => {
     return { code: r.status, body: JSON.parse(r.stdout || "null"), stderr: r.stderr };
   };
   beforeAll(() => {
-    spawnSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+    // dist is built once, before every file (test/build.global.ts).
     db = join(mkdtempSync(join(tmpdir(), "taskstore-plain-")), "store.db");
   }, 60000);
 

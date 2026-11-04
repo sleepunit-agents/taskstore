@@ -72,9 +72,8 @@ async function statusOf(cliArgs: string, rest: string): Promise<number> {
 }
 
 beforeAll(() => {
-  // Build once, so `cli` above is the current source. tsc is a couple of
-  // seconds and dist/ is gitignored, so this costs nothing a developer keeps.
-  execFileSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+  // `cli` above is the current source: dist is built once, before every
+  // file (test/build.global.ts).
   dir = mkdtempSync(join(tmpdir(), "taskstore-cli-"));
   dbPath = join(dir, "store.db");
   const store = new SqliteStore(dbPath);

@@ -176,7 +176,7 @@ describe("taskstore project-feed (the CLI verb)", () => {
     spawnSync(process.execPath, [cli, ...a], { encoding: "utf8", env: { ...baseEnv, TASKSTORE_DB: db, ...extra } });
 
   beforeAll(() => {
-    spawnSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+    // dist is built once, before every file (test/build.global.ts).
     db = join(mkdtempSync(join(tmpdir(), "taskstore-feed-")), "store.db");
     for (const a of [
       ["create", "Pond", "--type", "epic"],

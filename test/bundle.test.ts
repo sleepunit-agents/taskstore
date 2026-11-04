@@ -16,7 +16,6 @@ const hasAge = spawnSync("sh", ["-c", "command -v age && command -v age-keygen"]
 describe.skipIf(!hasAge)("taskstore bundle", () => {
   let dir: string;
   beforeAll(() => {
-    execFileSync("npx", ["tsc"], { cwd: repo });
     dir = mkdtempSync(join(tmpdir(), "taskstore-bundle-"));
   });
   const run = (args: string[], env: Record<string, string>, input?: string) =>
