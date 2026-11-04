@@ -122,7 +122,10 @@ function item(t: Task, status: string, when: string | undefined): FeedItem {
   if (when) it.when = when;
   it.status = clip(status, STATUS_MAX);
   if (t.id && t.id.length <= REF_MAX) it.ref = t.id;
-  const body = bodyOf(t.description);
+  // The plain summary leads (its goal, then why), then the description as written.
+  const plain = [t.goal?.trim(), t.why?.trim()].filter(Boolean).join(" ");
+  const desc = t.description?.trim();
+  const body = bodyOf(plain ? (desc ? `${plain}\n\n${desc}` : plain) : desc);
   if (body) it.body = body;
   return it;
 }

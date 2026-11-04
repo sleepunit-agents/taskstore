@@ -181,7 +181,7 @@ describe("taskstore project-feed (the CLI verb)", () => {
     for (const a of [
       ["create", "Pond", "--type", "epic"],
       ["create", "cut over", "--parent", "t-1", "--description", "dg-0123456789ab"],
-      ["create", "yours", "--parent", "t-1"], ["update", "t-3", "--assignee", "jonathan"],
+      ["create", "yours", "--parent", "t-1"], ["update", "t-3", "--assignee", "jonathan", "--ask", "Is this yours?"],
       ["create", "the toad thing"],
     ]) expect(run(a).status).toBe(0);
   }, 60000);

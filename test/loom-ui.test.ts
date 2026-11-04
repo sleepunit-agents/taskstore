@@ -99,10 +99,10 @@ describe("Work page", () => {
     expect(section(p, "yours")!.tone).toBe("warn");
     expect(block(p, "yours", "list")!.items!.map((i) => i.page)).toEqual(["task/t-4", "task/t-3"]);
     // No caller: the owner's tasks wear their initial and their name.
-    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "jonathan · Normal · t-4", avatar: "J" });
-    expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "art · High · t-1", agent: "art", page: "task/t-1" }]);
-    expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Waiting on t-1 · Normal · t-6", page: "task/t-6" }]);
-    expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Urgent · t-2", page: "task/t-2" }]);
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: "owner doing", meta: "Needs a plain summary · jonathan · Normal · t-4", avatar: "J" });
+    expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "Needs a plain summary · art · High · t-1", agent: "art", page: "task/t-1" }]);
+    expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Needs a plain summary · Waiting on t-1 · Normal · t-6", page: "task/t-6" }]);
+    expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Needs a plain summary · Urgent · t-2", page: "task/t-2" }]);
     expect(p.sections.some((s) => s.blocks.some((b) => b.type === "stats" || b.type === "filters"))).toBe(false);
   });
 
@@ -113,7 +113,7 @@ describe("Work page", () => {
     expect([of("next"), of("ready"), of("later")]).toEqual([["p0", "p1"], ["p2"], ["p3", "p4"]]);
     // No tone dot on any row: the group says it.
     expect(p.sections.flatMap((s) => s.blocks.flatMap((b) => (b as Blk).items ?? [])).some((i) => "tone" in i)).toBe(false);
-    expect(block(p, "ready", "list")!.items![0].meta).toBe("t-3");
+    expect(block(p, "ready", "list")!.items![0].meta).toBe("Needs a plain summary · t-3");
   });
 
   it("folds the last week's done at the foot, newest first, and the long queue too", () => {
@@ -121,7 +121,7 @@ describe("Work page", () => {
     const items = block(p, "done", "list")!.items!;
     expect(items.map((i) => i.page)).toEqual(["task/t-5"]);
     // Read like every other row: whose, priority, id, then when.
-    expect(items[0]).toMatchObject({ meta: "jonathan · High · t-5 · 12:09 PM" });
+    expect(items[0]).toMatchObject({ meta: "Needs a plain summary · jonathan · High · t-5 · 12:09 PM" });
     expect(items[0]).not.toHaveProperty("tone");
     const q = page(view(state([2, 3].map((priority) => ({ op: "create", title: `p${priority}`, priority })))), { path: "" });
     expect([section(q, "ready")!.fold, section(q, "later")!.fold]).toEqual(["closed", "closed"]);
@@ -130,11 +130,11 @@ describe("Work page", () => {
   it("the owner is you, in their own avatar, when a household owner is looking (loom's caller)", () => {
     const owner = { kind: "owner", who: "jonathan-barket", agents: "*" };
     const p = page(view(base()), { path: "", caller: owner });
-    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ meta: "you · Normal · t-4", person: "jonathan-barket" });
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ meta: "Needs a plain summary · you · Normal · t-4", person: "jonathan-barket" });
     expect(block(p, "yours", "list")!.items![0]).not.toHaveProperty("agent");
     // An agent's owner, or a caller that isn't one, isn't "you".
     for (const caller of [{ ...owner, agents: ["mark"] }, { kind: "stranger" }, { ...owner, who: "Not A Slug" }]) {
-      expect(block(page(view(base()), { path: "", caller }), "yours", "list")!.items![0]).toMatchObject({ meta: "jonathan · Normal · t-4", avatar: "J" });
+      expect(block(page(view(base()), { path: "", caller }), "yours", "list")!.items![0]).toMatchObject({ meta: "Needs a plain summary · jonathan · Normal · t-4", avatar: "J" });
     }
     const t = page(view(base()), { path: "task/t-4", caller: owner });
     expect(rows(t).find((i) => i.label === "Whose")).toEqual({ label: "Whose", value: "you" });
@@ -192,7 +192,8 @@ describe("task page", () => {
 
   it("the description is prose; the owner's task asks for their call; a closed one offers Reopen", () => {
     const one = page(view(base()), { path: "task/t-1" });
-    expect(block(one, "task", "prose")).toEqual({ type: "prose", text: "Why and how." });
+    expect(block(one, "background", "prose")).toEqual({ type: "prose", text: "Why and how." });
+    expect(section(one, "background")!.fold).toBe("open"); // all there is: open
     expect(rows(one)).toContainEqual({ label: "Started", value: "12:09 PM" });
     expect(block(one, "task", "callout")).toBeUndefined();
     const mine = page(view(base()), { path: "task/t-4" });
@@ -209,7 +210,7 @@ describe("task page", () => {
       { op: "comment", id: "t-1", text: "Also [[t-3]]." },
     ]);
     const p = page(view(s), { path: "task/t-1" });
-    expect(block(p, "task", "prose")!.text).toBe("See t-2, t-2 again, t-9 (gone), t-1 (itself) and [[a-page]].");
+    expect(block(p, "background", "prose")!.text).toBe("See t-2, t-2 again, t-9 (gone), t-1 (itself) and [[a-page]].");
     expect(block(p, "comments", "list")!.items![0].text).toBe("Also t-3.");
     expect(block(p, "mentioned", "list")!.items).toEqual([
       { text: "the other one", meta: "t-2 · Open", page: "task/t-2" },
@@ -228,7 +229,7 @@ describe("task page", () => {
     const s = state([{ op: "import", tasks: [{ id: "BD-1", title: "legacy", type: "task", status: "open", priority: 1, createdAt: AT, createdBy: "art", comments: [] }], links: [] }]);
     const m = manifest(view(s));
     const items = block(page(view(s), { path: "" }), "next", "list")!.items!;
-    expect(items[0]).toEqual({ text: "legacy", meta: "High · BD-1" });
+    expect(items[0]).toEqual({ text: "legacy", meta: "Needs a plain summary · High · BD-1" });
     expect(m.tile.value).toBe("0 in progress");
   });
 
@@ -236,7 +237,7 @@ describe("task page", () => {
     const long = "y".repeat(25000);
     const s = state([{ op: "create", title: "t", description: long }, { op: "comment", id: "t-1", text: "z".repeat(5000) }]);
     const p = page(view(s), { path: "task/t-1" });
-    expect((block(p, "task", "prose")!.text as string).length).toBe(20000);
+    expect((block(p, "background", "prose")!.text as string).length).toBe(20000);
     expect((block(p, "comments", "list")!.items![0].text as string).length).toBe(2000);
   });
 });
@@ -315,7 +316,7 @@ describe("taskstore ui (the CLI verbs)", () => {
     db = join(mkdtempSync(join(tmpdir(), "taskstore-ui-")), "store.db");
     for (const args of [
       ["create", "doing", "--priority", "1"], ["claim", "t-1"],
-      ["create", "yours", "--priority", "2"], ["update", "t-2", "--assignee", "jonathan"],
+      ["create", "yours", "--priority", "2"], ["update", "t-2", "--assignee", "jonathan", "--ask", "Is this yours?"],
     ]) expect(run(args).status).toBe(0);
   }, 60000);
 
@@ -330,7 +331,7 @@ describe("taskstore ui (the CLI verbs)", () => {
   it("ui --json is the v2 manifest", () => {
     const m = json(run(["ui", "--json"], "", { TASKSTORE_OWNER: "jonathan" }));
     expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready, urgent or high" } });
-    expect(m.asks).toEqual([{ text: "yours", meta: "Normal priority · t-2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "todo", attention: false }]);
+    expect(m.asks).toEqual([{ text: "Is this yours?", meta: "Normal priority · t-2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "todo", attention: false }]);
   });
 
   it("ui page --json answers both pages, and Not found for junk", () => {
@@ -419,9 +420,124 @@ describe("taskstore ui (the CLI verbs)", () => {
     const r = run(["ui", "page", "--json"], JSON.stringify({ path: "task/t-2" }));
     expect(r.stdout.length).toBeGreaterThan(65536);
     expect(json(r).title).toBe("yours");
-  });
+  }, 30000); // 41 CLI runs: past vitest's 5 s on a busy machine
 
   it("rejects an unknown ui subcommand as usage", () => {
     expect(run(["ui", "bogus", "--json"]).status).toBe(2);
+  });
+});
+
+describe("plain words: the summary and the owner's ask", () => {
+  const T1273 = {
+    title: "Find out why the field Pis drop off the network, using the failed Station 13 hotspot",
+    goal: "We know what makes a field Pi lose its connection, from a failing unit on a bench.",
+    why: "The same failure hit two sites, and we've never caught it on hardware we can test.",
+    ask: "Can you get the old Station 13 hotspot and a spare Pi onto a bench I can reach?",
+    ifYes: "I run the checks against a good hotspot and report what's actually wrong.",
+    ifNo: "I close this and fold it into t-1.",
+  };
+  const s = () => state([
+    { op: "create", title: "LTE hats", goal: "We know whether LTE hats replace the hotspots." },
+    { op: "create", ...T1273, priority: 1, description: "Original title: pond: get the dead S13 MiFi onto a bench\n\nSame signature at WV cartage." },
+    { op: "update", id: "t-2", set: { assignee: "jonathan" } },
+    { op: "create", title: "Pick a name", ask: "Gabe or Mark?", answers: "words", actor: "mark" },
+    { op: "update", id: "t-3", set: { assignee: "jonathan" } },
+  ]);
+
+  it("the Inbox item is the ask, with its why under it", () => {
+    expect(manifest(view(s())).asks.map((a) => [a.text, a.meta, a.page])).toEqual([
+      [T1273.ask, T1273.why, "task/t-2"],
+      ["Gabe or Mark?", "Normal priority · t-3", "task/t-3"],
+    ]);
+  });
+
+  it("the list leads with the plain title and the goal as the second line; the owner's rows lead with the ask", () => {
+    const p = page(view(s()), { path: "" });
+    expect(block(p, "next", "list")).toBeUndefined();
+    expect(block(p, "ready", "list")!.items![0]).toMatchObject({ text: "LTE hats", meta: "We know whether LTE hats replace the hotspots. · t-1" });
+    expect(block(p, "yours", "list")!.items![0]).toMatchObject({ text: T1273.ask, meta: `${T1273.why} · jonathan · High · t-2` });
+  });
+
+  it("the task page is Ask, Why, If yes, If no first, then the goal, then the background folded", () => {
+    const p = page(view(s()), { path: "task/t-2" });
+    expect(p.title).toBe(T1273.title);
+    expect(p.sections.map((x) => x.id)).toEqual(["ask", "task", "background", "comments", "facts"]);
+    expect(section(p, "ask")).toMatchObject({ title: "Waiting on you", tone: "warn" });
+    expect(block(p, "ask", "callout")).toEqual({ type: "callout", title: T1273.ask, text: T1273.why, tone: "warn" });
+    expect(block(p, "ask", "prose")!.text).toBe(`**If yes:** ${T1273.ifYes}\n\n**If no:** ${T1273.ifNo}`);
+    expect(block(p, "ask", "form")).toEqual({
+      type: "form", action: "answer", submit: "Send", hidden: { id: "t-2" },
+      submits: [{ label: "Yes", fields: { answer: "yes" }, tone: "primary" }, { label: "No", fields: { answer: "no" } }],
+      fields: [{ name: "text", label: "Or answer in your own words", kind: "textarea", hint: "It goes back to Art as your comment, posted as jonathan." }],
+    });
+    expect(block(p, "task", "prose")!.text).toBe(`**Goal:** ${T1273.goal}`);
+    expect(section(p, "background")).toMatchObject({ title: "Background", fold: "closed" });
+    expect(block(p, "background", "prose")!.text).toMatch(/^Original title: pond: get the dead S13 MiFi/);
+    expect(section(p, "reply")).toBeUndefined(); // the ask's own form answers it
+  });
+
+  it("an ask answered in words has one box; one that isn't the owner's any more just says what it asked", () => {
+    const words = page(view(s()), { path: "task/t-3" });
+    expect(block(words, "ask", "form")).toMatchObject({ action: "answer", fields: [{ label: "Your answer", required: true, hint: "It goes back to Mark as your comment, posted as jonathan." }] });
+    expect(block(words, "ask", "form")).not.toHaveProperty("submits");
+    const back = state([{ op: "create", title: "t", ask: "Go?" }]);
+    const p = page(view(back), { path: "task/t-1" });
+    expect(section(p, "ask")).toMatchObject({ title: "Asked of jonathan" });
+    expect(block(p, "ask", "form")).toBeUndefined();
+    expect(section(p, "reply")).toBeDefined();
+  });
+
+  it("a task with no summary says it needs one, and its description is all there is, open", () => {
+    const p = page(view(state([{ op: "create", title: "old", description: "a log" }])), { path: "task/t-1" });
+    expect(block(p, "task", "text")!.text).toMatch(/^Needs a plain summary/);
+    expect(section(p, "background")!.fold).toBe("open");
+  });
+
+  it("answers: Yes, No or words, as the owner's comment, back to the agent that asked", () => {
+    const v = { ...view(s()), agents: ["art", "mark"] };
+    expect(checkAct(v, { action: "answer", fields: { id: "t-2", answer: "yes", text: "  " } })).toEqual({
+      ok: true, action: "answer", id: "t-2", answer: "yes", to: "art",
+      text: `Yes, to: ${T1273.ask}\nIf yes, you said: ${T1273.ifYes}`,
+    });
+    expect(checkAct(v, { action: "answer", fields: { id: "t-2", answer: "no", text: "Patrick has it." } })).toMatchObject({
+      text: `No, to: ${T1273.ask}\nIf no, you said: ${T1273.ifNo}\n\nPatrick has it.`,
+    });
+    expect(checkAct(v, { action: "answer", fields: { id: "t-3", text: "Gabe." } })).toEqual({
+      ok: true, action: "answer", id: "t-3", to: "mark", text: "Answer, to: Gabe or Mark?\n\nGabe.",
+    });
+    for (const [fields, message] of [
+      [{ id: "t-3", answer: "yes" }, "This one needs your words, not a Yes or a No."],
+      [{ id: "t-2", answer: "maybe" }, "An answer is Yes or No."],
+      [{ id: "t-2" }, "Your answer is empty."],
+      [{ id: "t-1", answer: "yes" }, "That task doesn't ask anything."],
+    ] as const) expect(checkAct(v, { action: "answer", fields })).toEqual({ ok: false, message });
+    const answered = state([{ op: "create", title: "t", ask: "Go?" }]);
+    expect(checkAct(view(answered), { action: "answer", fields: { id: "t-1", answer: "yes" } })).toMatchObject({ ok: false, message: /isn't waiting on you/ });
+  });
+});
+
+describe("ui act answer (the CLI verb)", () => {
+  const repo = join(__dirname, "..");
+  const cli = join(repo, "dist", "cli.js");
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("TASKSTORE_")));
+  let db = "";
+  const run = (args: string[], input = "", extra: Record<string, string> = {}) =>
+    spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", input, env: { ...baseEnv, TASKSTORE_DB: db, ...extra } });
+  beforeAll(() => {
+    spawnSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+    db = join(mkdtempSync(join(tmpdir(), "taskstore-answer-")), "store.db");
+    expect(run(["create", "Plug in the backup drive", "--goal", "Backups have a second disk.", "--ask", "Can you plug the backup drive in?", "--if-yes", "I start the first backup."], "", { TASKSTORE_ACTOR: "mark" }).status).toBe(0);
+    expect(run(["update", "t-1", "--assignee", "jonathan"]).status).toBe(0);
+  }, 60000);
+
+  it("Yes is the owner's comment, and the task goes back to the agent that asked", () => {
+    const env = { TASKSTORE_OWNER: "jonathan", TASKSTORE_AGENTS: "art,mark" };
+    const r = run(["ui", "act", "--json"], JSON.stringify({ action: "answer", fields: { id: "t-1", answer: "yes", text: "It's the blue one." } }), env);
+    expect(JSON.parse(r.stdout)).toEqual({ ok: true, message: "You said yes. It's back with Mark.", page: "task/t-1" });
+    const t = JSON.parse(run(["show", "t-1"]).stdout).task;
+    expect(t.assignee).toBe("mark");
+    expect(t.comments).toEqual([{ actor: "jonathan", at: expect.any(String), text: "Yes, to: Can you plug the backup drive in?\nIf yes, you said: I start the first backup.\n\nIt's the blue one." }]);
+    // Answered: a second Yes finds nothing waiting.
+    expect(JSON.parse(run(["ui", "act", "--json"], JSON.stringify({ action: "answer", fields: { id: "t-1", answer: "yes" } }), env).stdout)).toMatchObject({ ok: false });
   });
 });
