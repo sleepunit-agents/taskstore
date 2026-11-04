@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runOps } from "../src/run-ops.js";
 import { apply, emptyState } from "../src/core.js";
 import type { Command } from "../src/core.js";
+import { runConcurrentWriters, type ConcurrentInput } from "./concurrency.js";
 
 interface Fixture {
   record: "fixture";
@@ -15,7 +16,7 @@ interface Fixture {
   description: string;
   format: string;
   input: { ops: Command[] };
-  expected: { results: unknown[] };
+  expected: { results?: unknown[]; lost?: string[] };
 }
 
 const dir = join(__dirname, "..", "spec", "taskstore-core");
@@ -30,10 +31,37 @@ describe("taskstore-core fixture corpus", () => {
   });
 
   for (const fx of fixtures) {
+    if (fx.format === "taskstore/concurrent-writers@0") continue; // below: processes, not runOps
     it(`${fx.id} — ${fx.description.slice(0, 70)}`, () => {
       expect(fx.format).toBe("taskstore/op-sequence@0");
       expect(runOps(fx.input.ops)).toEqual(fx.expected.results);
     });
+  }
+
+  it("holds no fixture in a format this harness doesn't run", () => {
+    const known = ["taskstore/op-sequence@0", "taskstore/concurrent-writers@0"];
+    expect(fixtures.filter((f) => !known.includes(f.format)).map((f) => `${f.id} (${f.format})`)).toEqual([]);
+  });
+});
+
+// it-ts-durable: the one contract property no pure op-sequence can witness,
+// because it is about several processes writing one persisted store at once.
+// Run through the SQLite binding (dist, built by test/build.global.ts), each
+// writer its own OS process. Before t-1831's fix this lost 442 of 773
+// acknowledged writes at 8 x 100; the CLI-level run is in cli-binding.test.ts.
+describe("taskstore-core concurrent-writers fixtures", () => {
+  for (const fx of fixtures.filter((f) => f.format === "taskstore/concurrent-writers@0")) {
+    it(`${fx.id} — ${fx.description.slice(0, 70)}`, async () => {
+      const input = fx.input as unknown as ConcurrentInput;
+      const out = await runConcurrentWriters(input, "store");
+      // Guard the guard: a run where nothing was acknowledged loses nothing.
+      expect(out.acknowledged).toBeGreaterThan(input.writers * input.opsPerWriter * 0.9);
+      expect({ lost: out.lost }).toEqual(fx.expected);
+      // Binding surface, not contract — but the same race broke both.
+      expect(out.mirrorMatchesStore).toBe(true);
+      expect(out.interactionsMatchAcks).toBe(true);
+      expect(out.refusals).toEqual([]);
+    }, 120_000);
   }
 });
 

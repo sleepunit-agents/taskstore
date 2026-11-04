@@ -21,11 +21,12 @@
 
 import Database from "better-sqlite3";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { SqliteStore } from "../src/sqlite-store.js";
+import { runConcurrentWriters } from "./concurrency.js";
 
 const repo = join(__dirname, "..");
 // The BUILT artifact, not the TypeScript source through a loader. The bug was
@@ -548,5 +549,50 @@ describe("TASKSTORE_ACTOR attribution", () => {
     await sh(`${cli} show ${id} > '${showOut}'`);
     const shown = JSON.parse(readFileSync(showOut, "utf8"));
     expect(shown.task.createdBy).toBe("testbot");
+  });
+});
+
+// t-1831. The contract's concurrent-writers fixture (conformance.test.ts)
+// runs the storage binding; this runs the same harness through real CLI
+// processes, the shape that lost ~20 of ~450 writes on the live store
+// (2026-11-04). Before the fix, 8 x 100 through the CLI lost 202 of 795.
+describe("concurrent CLI writers", () => {
+  it("every write the CLI acknowledged is in the store", async () => {
+    const out = await runConcurrentWriters({ writers: 6, opsPerWriter: 30, sharedTasks: 3 }, "cli");
+    expect(out.acknowledged).toBe(out.total);
+    expect(out.lost).toEqual([]);
+    expect(out.mirrorMatchesStore).toBe(true);
+  }, 120_000);
+
+  // A write that can't be applied must not be told ok. Here the mirror
+  // can't be published (its path is a directory), which used to be the
+  // failure of a write already committed: now it rolls the write back.
+  it("a write that can't be finished fails loudly and changes nothing", async () => {
+    const d = mkdtempSync(join(tmpdir(), "taskstore-fail-"));
+    const db = join(d, "store.db");
+    const s = new SqliteStore(db);
+    const id = s.run({ op: "create", title: "target", actor: "test", at: "2026-11-04T18:00:00.000Z" }).id as string;
+    s.close();
+    mkdirSync(join(d, "store.export.jsonl.d"));
+    // Swap the mirror file for a directory: the rename onto it fails.
+    execFileSync("sh", ["-c", `rm '${join(d, "store.export.jsonl")}' && mv '${join(d, "store.export.jsonl.d")}' '${join(d, "store.export.jsonl")}'`]);
+    let status = 0;
+    let stdout = "";
+    try {
+      stdout = execFileSync("node", [join(repo, "dist", "cli.js"), "comment", id, "never lands"], {
+        env: { ...process.env, TASKSTORE_DB: db }, stdio: ["ignore", "pipe", "pipe"],
+      }).toString();
+    } catch (e) {
+      status = (e as { status: number }).status;
+      stdout = String((e as { stdout: Buffer }).stdout);
+    }
+    expect(status).toBe(1);
+    const res = JSON.parse(stdout);
+    expect(res.ok).toBe(false);
+    expect(res.errors).toEqual(["E_STORE"]);
+    const after = new SqliteStore(db);
+    const task = (after.run({ op: "show", id }) as { task: { comments: unknown[] } }).task;
+    after.close();
+    expect(task.comments).toEqual([]);
   });
 });

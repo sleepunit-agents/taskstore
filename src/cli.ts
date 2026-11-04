@@ -470,7 +470,16 @@ if (plainCheck.refuse) {
   };
   console.error(`taskstore: refused: ${plainCheck.refuse}`);
 } else {
-  result = store.run(command);
+  try {
+    result = store.run(command);
+  } catch (err) {
+    // The store couldn't apply it: the write lock didn't come in time
+    // (SQLITE_BUSY), the disk is full, the mirror couldn't be written. The
+    // write rolled back, so this is a failure, said as one — never an ok.
+    const e = err as { code?: unknown; message?: unknown };
+    result = { ok: false, errors: ["E_STORE"], message: `the store couldn't apply this ${command.op}: ${String(e.message ?? err)}`, ...(typeof e.code === "string" ? { code: e.code } : {}) };
+    console.error(`taskstore: ${result.message}`);
+  }
   if (result.ok === true && plainCheck.warnings.length) {
     result.warnings = plainCheck.warnings;
     for (const w of plainCheck.warnings) console.error(`taskstore: warning: ${w}`);
