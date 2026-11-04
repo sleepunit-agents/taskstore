@@ -312,7 +312,7 @@ describe("taskstore ui (the CLI verbs)", () => {
 
   beforeAll(() => {
     // Built dist, like cli-binding.test.ts: what the installed launcher runs.
-    spawnSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+    // dist is built once, before every file (test/build.global.ts).
     db = join(mkdtempSync(join(tmpdir(), "taskstore-ui-")), "store.db");
     for (const args of [
       ["create", "doing", "--priority", "1"], ["claim", "t-1"],
@@ -524,7 +524,7 @@ describe("ui act answer (the CLI verb)", () => {
   const run = (args: string[], input = "", extra: Record<string, string> = {}) =>
     spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", input, env: { ...baseEnv, TASKSTORE_DB: db, ...extra } });
   beforeAll(() => {
-    spawnSync("npm", ["run", "build"], { cwd: repo, stdio: "pipe" });
+    // dist is built once, before every file (test/build.global.ts).
     db = join(mkdtempSync(join(tmpdir(), "taskstore-answer-")), "store.db");
     expect(run(["create", "Plug in the backup drive", "--goal", "Backups have a second disk.", "--ask", "Can you plug the backup drive in?", "--if-yes", "I start the first backup."], "", { TASKSTORE_ACTOR: "mark" }).status).toBe(0);
     expect(run(["update", "t-1", "--assignee", "jonathan"]).status).toBe(0);
