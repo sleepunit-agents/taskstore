@@ -34,7 +34,9 @@ const RULES: readonly Rule[] = [
   // A bare hex id (a commit, a device): six or more hex digits with at least one digit and one letter.
   { what: "a hex id", re: /(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,40}\b/gi },
   { what: "a round number", re: /\bround\s+\d+\b/gi },
-  { what: "a lane or wake word", re: /\b(?:nudge[- ]watch|chain[- ]check|local[- ]wake|lanes?|wake (?:in|at|park|relay|list))\b/gi },
+  // Lane and wake jargon, the words themselves: not "lane" alone, which is plain English and a music word too
+  // (Phasecraft's pitch lane), and is what a task about Art's lanes is about.
+  { what: "a lane or wake word", re: /\b(?:nudge[- ]watch|chain[- ]check|local[- ]wake|plan[- ]night|wake (?:in|at|park|relay|list))\b/gi },
   // A unit or site code (S13, A007): what someone on site calls it, not its row in a sheet.
   { what: "a raw site or unit code", re: /\b[A-Z]{1,2}\d{2,4}\b/g },
 ];

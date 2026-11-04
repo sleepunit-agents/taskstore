@@ -21,9 +21,10 @@ describe("lint", () => {
       .toEqual(["t-40", "a-7693c00e", "round 9", "local-wake"]);
   });
 
-  it("finds hex ids, house ids, pull requests and lane words", () => {
-    expect(texts(lint({ title: "restore ef2a7a's agent after h-52 died; see art#69 and the reflect lane" })))
-      .toEqual(["art#69", "h-52", "ef2a7a", "lane"]);
+  it("finds hex ids, house ids, pull requests and lane jargon, but not the word lane", () => {
+    expect(texts(lint({ title: "restore ef2a7a's agent after h-52 died; see art#69 and the plan-night lane" })))
+      .toEqual(["art#69", "h-52", "ef2a7a", "plan-night"]);
+    expect(lint({ title: "Make pitch a lane that bass, chords and lead sample at their own rates" })).toEqual([]);
   });
 
   it("lets the lines read in context name a task or a pull request (loom links them), but not internal ids", () => {
