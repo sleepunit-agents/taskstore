@@ -7,9 +7,16 @@
 //   taskstore ready
 //   taskstore create "title" [--description d] [--type t] [--priority n]
 //                    [--parent id] [--spec-item-ref r] [--criterion-id c]
-//                    [--legacy-ref r]
+//                    [--legacy-ref r] [plain flags]
+//     plain flags (create and update; src/plain.ts lints them):
+//       --goal g --why w --done-when d          the plain summary
+//       --ask a --if-yes y --if-no n --answers yes-no|words   the owner's ask
+//     A task that's the owner's (TASKSTORE_OWNER, else jonathan) is refused
+//     until it reads plainly and has an --ask; any other is written, with
+//     "warnings" in the answer when it doesn't read plainly or has no --goal.
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
-//   taskstore update <id> --title t | --description d | --priority n | --assignee a
+//   taskstore update <id> --title t | --description d | --priority n | --assignee a | plain flags
+//     ("" clears a plain flag's field; --ask "" clears the ask and its parts)
 //   taskstore comment <id> "text"
 //   taskstore link <id> <dependsOn> --type blocks|parent-child
 //   taskstore unlink <id> <dependsOn> --type blocks|parent-child
@@ -32,6 +39,7 @@ import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
 import { checkAct, manifest, page, priorityWord, type ReadyEntry, type UiView } from "./loom-ui.js";
 import { answer, type ApiRequest } from "./loom-api.js";
+import { describe as describeFinding, EXAMPLE, lint, PLAIN_RULE, type Finding, type PlainField } from "./plain.js";
 import { feed, parseFeedArgs } from "./project-feed.js";
 import { spawn, spawnSync } from "node:child_process";
 
@@ -81,14 +89,18 @@ const dbPath = resolve(process.env.TASKSTORE_DB ?? join(".taskstore", "store.db"
 // malformed command read back as a valid, narrower one. Unknown verbs are
 // already caught by the switch's default case; this catches unknown FLAGS
 // on a verb that otherwise matched.
+/** The plain flags (create and update), by the core field each one sets. */
+const PLAIN_FLAGS: Record<string, string> = {
+  goal: "goal", why: "why", "done-when": "doneWhen", ask: "ask", "if-yes": "ifYes", "if-no": "ifNo", answers: "answers",
+};
 const KNOWN_FLAGS: Record<string, Set<string>> = {
-  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref"]),
+  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref", ...Object.keys(PLAIN_FLAGS)]),
   claim: new Set(),
   unclaim: new Set(),
   close: new Set(["reason"]),
   reopen: new Set(),
   delete: new Set(),
-  update: new Set(["title", "description", "assignee", "priority"]),
+  update: new Set(["title", "description", "assignee", "priority", ...Object.keys(PLAIN_FLAGS)]),
   comment: new Set(),
   link: new Set(["type"]),
   unlink: new Set(["type"]),
@@ -129,6 +141,7 @@ function buildCommand(): Command {
       if (flags["spec-item-ref"] !== undefined) c.specItemRef = flags["spec-item-ref"];
       if (flags["criterion-id"] !== undefined) c.criterionId = flags["criterion-id"];
       if (flags["legacy-ref"] !== undefined) c.legacyRef = flags["legacy-ref"];
+      for (const [flag, key] of Object.entries(PLAIN_FLAGS)) if (flags[flag] !== undefined) c[key] = flags[flag];
       return c;
     }
     case "claim":
@@ -148,6 +161,7 @@ function buildCommand(): Command {
       const set: Record<string, unknown> = {};
       for (const k of ["title", "description", "assignee"]) if (flags[k] !== undefined) set[k] = flags[k];
       if (flags.priority !== undefined) set.priority = Number(flags.priority);
+      for (const [flag, key] of Object.entries(PLAIN_FLAGS)) if (flags[flag] !== undefined) set[key] = flags[flag];
       return { op: "update", id: positional[0], set, actor, at };
     }
     case "comment":
@@ -323,7 +337,7 @@ if (verb === "ui") {
     const ready = uiStore.run({ op: "ready" }) as { entries?: ReadyEntry[] };
     return {
       tasks: all.tasks ?? [], links: all.links ?? [], ready: ready.entries ?? [],
-      owner, now: new Date(), timeZone: process.env.TZ || undefined,
+      owner, now: new Date(), timeZone: process.env.TZ || undefined, agents: agentsSetting(),
     };
   };
   let out: unknown;
@@ -347,7 +361,7 @@ if (verb === "ui") {
       let message = "Comment added.";
       if (r.ok === true && owner) {
         // The owner answered: the task goes back to the agents (it leaves Your call), and one is woken to act on it.
-        const agent = (process.env.TASKSTORE_AGENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean)[0];
+        const agent = agentsSetting()[0];
         const task = (uiStore.run({ op: "show", id: check.id }) as { task?: { assignee?: string } }).task;
         if (agent && task?.assignee === owner) uiStore.run({ op: "update", id: check.id, set: { assignee: agent }, actor: owner, at } as Command);
         if (onOwnerComment(check.id)) message = `Comment added. ${agent ? agent[0].toUpperCase() + agent.slice(1) : "An agent"} picks it up.`;
@@ -355,6 +369,18 @@ if (verb === "ui") {
       out = r.ok === true
         ? { ok: true, message, page: `task/${check.id}` }
         : { ok: false, message: `The comment wasn't added (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
+    } else if (check.action === "answer") {
+      // The owner answered the ask (Yes, No, or words): their comment, the task back to the agent that asked, and that
+      // agent woken (TASKSTORE_ON_OWNER_COMMENT), as a reply from the page does.
+      const at = new Date().toISOString();
+      const r = uiStore.run({ op: "comment", id: check.id, text: check.text, actor: owner, at });
+      if (r.ok === true) uiStore.run({ op: "update", id: check.id, set: { assignee: check.to }, actor: owner, at } as Command);
+      const woke = r.ok === true && onOwnerComment(check.id);
+      const who = check.to[0].toUpperCase() + check.to.slice(1);
+      const said = check.answer === "yes" ? "You said yes." : check.answer === "no" ? "You said no." : "Sent.";
+      out = r.ok === true
+        ? { ok: true, message: `${said} ${woke ? `${who} picks it up.` : `It's back with ${who}.`}`, page: `task/${check.id}` }
+        : { ok: false, message: `Your answer wasn't saved (${(r.errors as string[] | undefined)?.join(", ") ?? "rejected"}).` };
     } else if (check.action === "priority") {
       // The facts panel's segmented control: the priority, in place.
       const r = uiStore.run({ op: "update", id: check.id, set: { priority: check.priority }, actor: owner || "loom-page", at: new Date().toISOString() } as Command);
@@ -403,6 +429,11 @@ if (verb === "project-feed") {
   process.exit(0);
 }
 
+/** TASKSTORE_AGENTS, in order. */
+function agentsSetting(): string[] {
+  return (process.env.TASKSTORE_AGENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 /**
  * TASKSTORE_ON_OWNER_COMMENT: a command as a JSON array of strings, "{id}"
  * standing for the task, run (detached, no shell) when the owner comments from
@@ -427,8 +458,68 @@ checkKnownFlags();
 const command = buildCommand();
 mkdirSync(dirname(dbPath), { recursive: true });
 const store = new SqliteStore(dbPath);
-const result = store.run(command);
+// Plain words (src/plain.ts): read before the write, so an owner's task that
+// doesn't read plainly is refused with nothing written.
+const plainCheck = plainWords(store, command);
+let result: Record<string, unknown>;
+if (plainCheck.refuse) {
+  result = {
+    ok: false, errors: ["E_NOT_PLAIN"],
+    message: `${plainCheck.refuse} ${PLAIN_RULE} Say it again in words, like:\n${EXAMPLE}`,
+    found: plainCheck.findings.map(describeFinding),
+  };
+  console.error(`taskstore: refused: ${plainCheck.refuse}`);
+} else {
+  result = store.run(command);
+  if (result.ok === true && plainCheck.warnings.length) {
+    result.warnings = plainCheck.warnings;
+    for (const w of plainCheck.warnings) console.error(`taskstore: warning: ${w}`);
+  }
+}
 store.close();
+
+/**
+ * The plain-words policy over a create or update. The owner's task (assigned
+ * to TASKSTORE_OWNER, else jonathan) is refused when what it's given doesn't
+ * read plainly, or when it becomes the owner's with no ask: a person reads
+ * it, so it says what's asked. Any other task is written regardless, and
+ * the answer carries warnings: an agent filing work mid-lane loses nothing.
+ * Only what this command sets is read, plus the whole headline when the task
+ * becomes the owner's: a priority bump on an old task isn't held up by its title.
+ */
+function plainWords(s: SqliteStore, c: Command): { refuse?: string; findings: Finding[]; warnings: string[] } {
+  const none = { findings: [], warnings: [] };
+  if (c.op !== "create" && c.op !== "update") return none;
+  const owner = process.env.TASKSTORE_OWNER?.trim() || "jonathan";
+  const given: Record<string, unknown> = c.op === "create" ? c : ((c.set as Record<string, unknown> | undefined) ?? {});
+  const before = c.op === "update" && typeof c.id === "string"
+    ? ((s.run({ op: "show", id: c.id }) as { task?: Task }).task)
+    : undefined;
+  if (c.op === "update" && !before) return none; // the core reports the unknown id
+  const after = { ...(before ?? {}), ...given } as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
+  const fields: PlainField[] = ["title", "goal", "why", "doneWhen", "ask", "ifYes", "ifNo"];
+  const becomesOwners = after.assignee === owner && before?.assignee !== owner;
+  const read: Partial<Record<PlainField, string>> = {};
+  for (const f of fields) {
+    const v = becomesOwners && (f === "title" || f === "ask") ? str(after[f]) : str(given[f]);
+    if (v !== undefined) read[f] = v;
+  }
+  const findings = lint(read);
+  const isOwners = after.assignee === owner;
+  const askLeft = !str(after.ask);
+  if (isOwners && (findings.length || (askLeft && (becomesOwners || given.ask !== undefined)))) {
+    const why = findings.length
+      ? `This task is ${owner}'s to read, and ${findings.map(describeFinding).join("; ")}.`
+      : `This task is ${owner}'s: give it an --ask (one plain question; --if-yes and --if-no say what happens either way).`;
+    return { refuse: why, findings, warnings: [] };
+  }
+  const warnings = findings.map((f) => `${describeFinding(f)}: it will read as jargon on the task list`);
+  const touchesHeadline = c.op === "create" || given.title !== undefined || given.goal !== undefined;
+  if (touchesHeadline && !str(after.goal)) warnings.push("needs a plain summary: give it a --goal (what's true when it's done) and a --why");
+  if (warnings.length) warnings.push(`the plain form, like:\n${EXAMPLE}`);
+  return { findings, warnings };
+}
 
 // Echo the edge in words on link/unlink. Direction is the other silent
 // mistake on this verb — `link A B` means A depends on B, and a reversed pair

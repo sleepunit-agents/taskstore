@@ -37,4 +37,33 @@ as locally (`src/loom-api.ts`). It runs as loom's resolved caller: the owner (as
 `TASKSTORE_OWNER`), or an agent named in `TASKSTORE_AGENTS`, as that agent.
 Nobody else gets in, and `import` (which reads a file on loom's machine) stays local.
 
+## Plain words
+
+Every task can say what it's for in words a person reads: `--goal` (what's
+true when it's done), `--why` and `--done-when`. A task that needs the owner
+also carries the ask: `--ask` (one plain question), `--if-yes`, `--if-no` and
+`--answers yes-no|words`. They're fields on the task (`spec/taskstore-core`,
+it-ts-plain), on `create` and `update`; `""` clears one.
+
+```bash
+taskstore create "Back up the photos offsite" \
+  --goal "Every photo has a copy off this machine." --why "One disk failure would lose them all."
+taskstore update t-1273 --assignee jonathan \
+  --ask "Can you get the old Station 13 hotspot onto a bench I can reach?" \
+  --if-yes "I test it and report what's wrong." --if-no "I close this."
+```
+
+The CLI lints the title, goal and ask (`src/plain.ts`): no ids, lane or wake
+words, round numbers, site codes or a leading `tag:`. The owner's task
+(`TASKSTORE_OWNER`, else `jonathan`) is refused (`E_NOT_PLAIN`, exit 1, with
+the plain form to retry in) until it reads plainly and has an ask. Any other
+task is written anyway, with `warnings` in the answer and on stderr.
+
+On loom's page the ask is the Inbox item's headline, with its why under it;
+the task page leads with Ask, Why, If yes and If no, then the goal, with the
+description folded under Background. The owner answers with Yes or No, or in
+their own words, in one form: the answer is their comment, the task goes back
+to the agent that asked (`askedBy`, else the first of `TASKSTORE_AGENTS`, else
+`art`), and `TASKSTORE_ON_OWNER_COMMENT` wakes it.
+
 Born in felag ceremony 2 (art-ubo.6, 2026-06-12).

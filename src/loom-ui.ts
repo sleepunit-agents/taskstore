@@ -32,6 +32,8 @@ export interface UiView {
    * they read "you" and wear that person's avatar. Undefined outside a household, or for anyone else.
    */
   viewer?: string;
+  /** TASKSTORE_AGENTS, in order: who an answered ask goes back to when the agent that asked isn't known. */
+  agents?: string[];
 }
 
 type Block = Record<string, unknown> & { type: string };
@@ -127,6 +129,16 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const statusWords = (s: string) => cap(s === "in_progress" ? "in progress" : s);
 
+/** What a task says it's for, on the line under its title: its goal, else that it has none yet. */
+export const NO_SUMMARY = "Needs a plain summary";
+const goalLine = (t: Task) => t.goal?.trim() || NO_SUMMARY;
+
+/** How the owner answers a task's ask: as it says, else Yes or No when it says what happens either way. */
+export function answersOf(t: Task): "yes-no" | "words" {
+  if (t.answers) return t.answers;
+  return t.ifYes || t.ifNo ? "yes-no" : "words";
+}
+
 // ------------------------------------------------------------- manifest
 
 export function manifest(v: UiView) {
@@ -142,9 +154,11 @@ export function manifest(v: UiView) {
       ...(hot ? { tone: "warn" } : {}),
       page: "",
     },
+    // The ask is the headline and its why the line under it (Jonathan, 2026-11-04: t-1273 read like a log, not a
+    // request); a task with no ask yet shows its title and goal.
     asks: ownersCall(v).slice(0, MAX_ASKS).map((t) => ({
-      text: clip(t.title, TITLE_MAX),
-      meta: `${priorityMeta(t.priority)} · ${t.id}`,
+      text: clip(t.ask?.trim() || t.title, TITLE_MAX),
+      meta: clip(t.ask?.trim() ? (t.why?.trim() || t.goal?.trim() || `${priorityMeta(t.priority)} · ${t.id}`) : (t.goal?.trim() || `${priorityMeta(t.priority)} · ${t.id}`)),
       ...taskLink(t.id),
       label: "Open",
       // Its age on the card: since it was started, else since it was filed.
@@ -266,9 +280,14 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""));
 
   // No tone dot on a row: its group already says whether it's blocked, later or done (Jonathan, 2026-10-31).
+  // The plain title, and its goal as the second line (Jonathan, 2026-11-04: "if I can't understand it from the task
+  // list, I can't know if we're doing the right thing"); the facts follow the goal.
   const row = (t: Task, meta: Array<string | false | undefined>) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip(meta.filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
+    text: clip(t.title, TITLE_MAX), meta: clip([goalLine(t), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
   });
+  const askRow = (t: Task, meta: Array<string | false | undefined>) => (t.ask?.trim()
+    ? { text: clip(t.ask, TITLE_MAX), meta: clip([t.why?.trim() || t.goal?.trim(), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id) }
+    : row(t, meta));
   const who = (t: Task) => nameOf(v, t.assignee);
   const pri = (t: Task) => priorityWord(t.priority);
   const sections: Section[] = [weeks(v)];
@@ -287,7 +306,7 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     });
   };
 
-  group("yours", "Waiting on you", ownersCall(v).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), "warn");
+  group("yours", "Waiting on you", ownersCall(v).filter(take).map((t) => askRow(t, [who(t), pri(t), t.id])), "warn");
   group("doing", "In progress", inProgress(v).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
   const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
   group("blocked", "Blocked", blocked.filter(take).map((t) => {
@@ -357,15 +376,35 @@ export function taskPage(v: UiView, id: string): Page {
   const comments = t.comments.slice(-HISTORY_SHOWN).map((c) => ({ ...c, text: unlink(c.text) }));
 
   const yours = v.owner !== "" && t.status !== "closed" && t.assignee === v.owner;
-  // The board's Task: the ask (if it's yours), the description as written
-  // (markdown, a prose block), then Mark done — or Reopen once it's closed.
+  const ask = t.ask?.trim();
+  // The board's Task, plain words first (Jonathan, 2026-11-04): the ask when there is one (Ask, Why, If yes, If no,
+  // and its answer, if it's yours), the goal, why and done-when, then the description as written folded under
+  // Background, then Mark done, or Reopen once it's closed.
+  const summary = [["Goal", t.goal], ["Why", ask ? undefined : t.why], ["Done when", t.doneWhen]]
+    .filter(([, x]) => x?.trim()).map(([k, x]) => `**${k}:** ${unlink(x!.trim())}`);
   const main: Block[] = [
-    ...(yours ? [{ type: "callout", title: "Waiting on you", text: "Your answer goes in the reply below; it's picked up from there.", tone: "warn" }] : []),
-    description ? { type: "prose", text: description.slice(0, PROSE_MAX) } : { type: "text", text: "No description.", tone: "muted" },
+    // The owner's task with no ask yet: still theirs to answer, in the reply below.
+    ...(yours && !ask ? [{ type: "callout", title: "Waiting on you", text: "Your answer goes in the reply below; it's picked up from there.", tone: "warn" }] : []),
+    summary.length ? { type: "prose", text: summary.join("\n\n").slice(0, PROSE_MAX) }
+      : { type: "text", text: description ? "Needs a plain summary: nobody has said what this is for in plain words yet. What's written is under Background." : "Needs a plain summary.", tone: "muted" },
     { type: "buttons", items: [t.status === "closed"
       ? { action: "reopen", label: "Reopen", fields: { id: t.id } }
-      : { action: "close", label: "Mark done", tone: "primary", fields: { id: t.id } }] },
+      : { action: "close", label: "Mark done", ...(yours && ask ? {} : { tone: "primary" }), fields: { id: t.id } }] },
   ];
+
+  // The ask: a question, why, and what happens either way. The owner's answers it here: Yes or No (a yes/no ask), or
+  // in their own words, in one form, so words typed beside a Yes go with it (loom keeps them until they're sent).
+  const askSection: Section[] = ask ? [{
+    id: "ask", title: yours ? "Waiting on you" : t.status === "closed" ? "It asked" : `Asked of ${nameOf(v, v.owner) ?? "the owner"}`,
+    ...(yours ? { tone: "warn" } : {}),
+    blocks: [
+      { type: "callout", title: clip(ask), text: clip(t.why?.trim() || "No why given."), ...(yours ? { tone: "warn" } : {}) },
+      ...([["If yes", t.ifYes], ["If no", t.ifNo]].some(([, x]) => x?.trim())
+        ? [{ type: "prose", text: [["If yes", t.ifYes], ["If no", t.ifNo]].filter(([, x]) => x?.trim()).map(([k, x]) => `**${k}:** ${unlink(x!.trim())}`).join("\n\n") }]
+        : []),
+      ...(yours ? [answerForm(v, t)] : []),
+    ],
+  }] : [];
 
   const history: Block[] = comments.length
     ? [
@@ -374,24 +413,68 @@ export function taskPage(v: UiView, id: string): Page {
     ]
     : [{ type: "text", text: "No comments yet.", tone: "muted" }];
 
+  // Background: the description as written. Folded once there's a plain summary or an ask to read first; open when
+  // it's all there is.
+  const background: Section[] = description ? [{
+    id: "background", title: "Background", fold: summary.length || ask ? "closed" : "open",
+    blocks: [{ type: "prose", text: description.slice(0, PROSE_MAX) }],
+  }] : [];
+  const answering = yours && !!ask;
+
   return {
     title: clip(t.title),
     intro: `${status} · ${priorityMeta(t.priority)} · ${t.id}`,
     sections: [
+      ...askSection,
       { id: "task", blocks: main },
+      ...background,
       ...(mentioned.length ? [{ id: "mentioned", title: "Mentioned", blocks: [{ type: "list", items: mentioned.slice(0, 50).map((id) => {
         const m = v.tasks.find((x) => x.id === id)!;
         return { text: clip(m.title, TITLE_MAX), meta: `${id} · ${m.status === "open" && isBlocked(v, id) ? "Open (blocked)" : statusWords(m.status)}`, ...whoOf(v, m.assignee), ...taskLink(id) };
       }) }] }] : []),
       { id: "comments", title: "Comments", blocks: history },
-      { id: "reply", blocks: [{
+      // The ask's own form answers it; a task with no ask (or not the owner's) has the plain Reply.
+      ...(answering ? [] : [{ id: "reply", blocks: [{
         type: "form", action: "comment", title: "Reply", submit: "Send",
         hidden: { id: t.id },
         fields: [{ name: "text", label: yours ? "Your call" : "Reply", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
-      }] },
+      }] }]),
       { id: "facts", side: true, blocks: [{ type: "panel", rows }] },
     ],
   };
+}
+
+/**
+ * The owner's answer to a task's ask: one form, so nothing typed is lost to a button (loom#479's guard). A yes/no ask
+ * has Yes and No as its submits, each sending whatever words are in the box with it, and Send for words alone; an
+ * ask answered in words has Send only. loom keeps the box's words on the device until they're sent.
+ */
+function answerForm(v: UiView, t: Task): Block {
+  const yesNo = answersOf(t) === "yes-no";
+  return {
+    type: "form", action: "answer", submit: "Send", hidden: { id: t.id },
+    ...(yesNo ? { submits: [
+      { label: "Yes", fields: { answer: "yes" }, tone: "primary" },
+      { label: "No", fields: { answer: "no" } },
+    ] } : {}),
+    fields: [{ name: "text", label: yesNo ? "Or answer in your own words" : "Your answer", kind: "textarea", ...(yesNo ? {} : { required: true }),
+      hint: `It goes back to ${cap(agentFor(v, t))} as your comment, posted as ${v.owner}.` }],
+  };
+}
+
+/** Who an answered ask goes back to: the agent that asked, else the first of the store's agents, else art. */
+export function agentFor(v: Pick<UiView, "owner" | "agents">, t: Task): string {
+  const asked = t.askedBy?.trim();
+  if (asked && asked !== v.owner && AGENT_ID.test(asked) && asked !== PAGE_ACTOR) return asked;
+  return v.agents?.[0] ?? "art";
+}
+
+/** What the owner's answer says on the task, as their comment: the answer, the ask, and its own line for it. */
+export function answerText(t: Task, answer: "yes" | "no" | undefined, words: string): string {
+  const ask = t.ask?.trim() ?? "";
+  if (!answer) return `Answer, to: ${ask}\n\n${words}`;
+  const line = answer === "yes" ? t.ifYes?.trim() : t.ifNo?.trim();
+  return `${answer === "yes" ? "Yes" : "No"}, to: ${ask}${line ? `\nIf ${answer}, you said: ${line}` : ""}${words ? `\n\n${words}` : ""}`;
 }
 
 /** The board's "+": a task's title, how urgent, whose, and a note. */
@@ -419,6 +502,7 @@ export type ActCheck =
   | { ok: true; action: "comment"; id: string; text: string }
   | { ok: true; action: "close" | "reopen"; id: string }
   | { ok: true; action: "priority"; id: string; priority: number }
+  | { ok: true; action: "answer"; id: string; text: string; to: string; answer?: "yes" | "no" }
   | { ok: false; message: string };
 
 /** Validate a `ui act` request: comment, close (Mark done), reopen (its Undo). loom passes fields through unchecked. */
@@ -433,7 +517,7 @@ export function checkAct(v: UiView, req: unknown): ActCheck {
     const description = typeof f.description === "string" && f.description.trim() ? f.description.trim().slice(0, COMMENT_MAX) : undefined;
     return { ok: true, action: "create", title, priority, ...(description ? { description } : {}), mine: f.mine === "1" && v.owner !== "" };
   }
-  if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen" && req.action !== "priority") return { ok: false, message: "taskstore doesn't know that action." };
+  if (req.action !== "comment" && req.action !== "close" && req.action !== "reopen" && req.action !== "priority" && req.action !== "answer") return { ok: false, message: "taskstore doesn't know that action." };
   const fields = isObj(req.fields) ? req.fields : {};
   const id = fields.id;
   const task = typeof id === "string" ? v.tasks.find((t) => t.id === id) : undefined;
@@ -445,6 +529,19 @@ export function checkAct(v: UiView, req: unknown): ActCheck {
     return { ok: true, action: "priority", id, priority: Number(p) };
   }
   if (req.action === "reopen") return task.status !== "closed" ? { ok: false, message: "It isn't closed." } : { ok: true, action: "reopen", id };
+  if (req.action === "answer") {
+    if (!task.ask?.trim()) return { ok: false, message: "That task doesn't ask anything." };
+    if (v.owner === "" || task.assignee !== v.owner || task.status === "closed") return { ok: false, message: "That ask isn't waiting on you any more: it was answered, or it's done." };
+    const a = fields.answer;
+    if (a !== undefined && a !== "" && a !== "yes" && a !== "no") return { ok: false, message: "An answer is Yes or No." };
+    const answer = a === "yes" || a === "no" ? a : undefined;
+    if (answer && answersOf(task) !== "yes-no") return { ok: false, message: "This one needs your words, not a Yes or a No." };
+    const words = typeof fields.text === "string" ? fields.text.trim() : "";
+    if (!answer && !words) return { ok: false, message: "Your answer is empty." };
+    const text = answerText(task, answer, words);
+    if (text.length > COMMENT_MAX) return { ok: false, message: `Your answer is ${words.length} characters; the limit is about ${COMMENT_MAX}.` };
+    return { ok: true, action: "answer", id, text, to: agentFor(v, task), ...(answer ? { answer } : {}) };
+  }
   const text = typeof fields.text === "string" ? fields.text.trim() : "";
   if (!text) return { ok: false, message: "The comment is empty." };
   if (text.length > COMMENT_MAX)

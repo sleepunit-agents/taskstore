@@ -30,7 +30,22 @@ export interface Task {
   legacyRef?: string;
   specItemRef?: string;
   criterionId?: string;
+  // The plain summary (it-ts-plain): what's true when it's done, why it
+  // matters, and how we'll know. Every task should carry one; none is required.
+  goal?: string;
+  why?: string;
+  doneWhen?: string;
+  // The owner's ask (it-ts-plain): the one question a person answers, what
+  // happens either way, and how it's answered. askedBy is stamped from the
+  // command that set the ask, so an answer can go back to whoever asked.
+  ask?: string;
+  ifYes?: string;
+  ifNo?: string;
+  answers?: Answers;
+  askedBy?: string;
 }
+
+export type Answers = "yes-no" | "words";
 
 export interface Link {
   id: string;
@@ -52,9 +67,14 @@ export type Result = Record<string, unknown>;
 const TYPES: readonly string[] = ["task", "bug", "feature", "epic"];
 const STATUSES: readonly string[] = ["open", "in_progress", "closed"];
 const LINK_TYPES: readonly string[] = ["blocks", "parent-child"];
-const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title"];
+const ANSWERS: readonly string[] = ["yes-no", "words"];
+/** The plain summary and the ask: optional strings an update clears with "". */
+export const PLAIN_FIELDS = ["goal", "why", "doneWhen", "ask", "ifYes", "ifNo", "answers"] as const;
+/** Held only beside an ask. */
+const ASK_PARTS = ["ifYes", "ifNo", "answers"] as const;
+const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title", ...PLAIN_FIELDS];
 const SEARCH_FIELDS: readonly string[] = [
-  "id", "title", "description", "specItemRef", "criterionId", "legacyRef",
+  "id", "title", "description", "specItemRef", "criterionId", "legacyRef", "goal", "why", "ask",
 ];
 
 // "Parseable" per felag-core it-verification's Timestamps rule (incorporated
@@ -124,6 +144,15 @@ function optString(errs: Errs, v: unknown): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * The plain fields, as given: optional strings (E_BAD_FIELD otherwise), and
+ * answers one of its two words when it's non-empty ("" clears on update).
+ */
+function checkPlain(errs: Errs, c: Record<string, unknown>): void {
+  for (const f of PLAIN_FIELDS) optString(errs, c[f]);
+  if (isString(c.answers) && c.answers !== "" && !ANSWERS.includes(c.answers)) errs.add("E_BAD_FIELD");
 }
 
 function clone<T>(v: T): T {
@@ -199,6 +228,7 @@ function listEntry(state: StoreState, t: Task): Record<string, unknown> {
   };
   const parent = state.links.find((l) => l.type === "parent-child" && l.id === t.id);
   if (parent) entry.parent = parent.dependsOn;
+  if (t.goal !== undefined) entry.goal = t.goal;
   return entry;
 }
 
@@ -275,6 +305,8 @@ function doCreate(state: StoreState, c: Command): Result {
   optString(errs, c.specItemRef);
   optString(errs, c.criterionId);
   optString(errs, c.legacyRef);
+  checkPlain(errs, c);
+  if (!(isString(c.ask) && c.ask !== "") && ASK_PARTS.some((f) => isString(c[f]) && c[f] !== "")) errs.add("E_MISSING_FIELD");
   if (c.type !== undefined && !(isString(c.type) && TYPES.includes(c.type)))
     errs.add("E_BAD_TYPE");
   if (c.priority !== undefined && !isPriority(c.priority)) errs.add("E_BAD_PRIORITY");
@@ -307,6 +339,8 @@ function doCreate(state: StoreState, c: Command): Result {
   if (c.legacyRef !== undefined) task.legacyRef = c.legacyRef as string;
   if (c.specItemRef !== undefined) task.specItemRef = c.specItemRef as string;
   if (c.criterionId !== undefined) task.criterionId = c.criterionId as string;
+  for (const f of PLAIN_FIELDS) if (isString(c[f]) && c[f] !== "") (task as unknown as Record<string, unknown>)[f] = c[f];
+  if (task.ask !== undefined) task.askedBy = c.actor as string;
   state.tasks.push(task);
   if (isString(c.parent)) state.links.push({ id, dependsOn: c.parent, type: "parent-child" });
   return { created: true, errors: [], id, ok: true };
@@ -387,17 +421,34 @@ function doUpdate(state: StoreState, c: Command): Result {
         if (!isPriority(v)) errs.add("E_BAD_PRIORITY");
       } else if (!isString(v)) errs.add("E_BAD_FIELD");
     }
+    checkPlain(errs, c.set);
   }
   const task = isString(c.id) ? findTask(state, c.id) : undefined;
   if (isString(c.id) && task === undefined) errs.add("E_UNKNOWN_ID");
+  // An if-yes, if-no or answers is held only beside an ask: the task's own,
+  // or one this update sets (clearing the ask clears them with it).
+  if (task && isPlainObject(c.set)) {
+    const set = c.set;
+    const askAfter = set.ask !== undefined ? set.ask : task.ask;
+    if (!(isString(askAfter) && askAfter !== "") && ASK_PARTS.some((f) => isString(set[f]) && set[f] !== ""))
+      errs.add("E_MISSING_FIELD");
+  }
   if (errs.any) return { errors: errs.list(), ok: false };
 
   const set = c.set as Record<string, unknown>;
   const t = task!;
+  const tr = t as unknown as Record<string, unknown>;
   if (set.title !== undefined) t.title = set.title as string;
   if (set.description !== undefined) t.description = set.description as string;
   if (set.priority !== undefined) t.priority = set.priority as number;
   if (set.assignee !== undefined) t.assignee = set.assignee as string;
+  if (set.ask === "") for (const f of [...ASK_PARTS, "ask", "askedBy"]) delete tr[f];
+  for (const f of PLAIN_FIELDS) {
+    if (set[f] === undefined || (f === "ask" && set.ask === "")) continue;
+    if (set[f] === "") delete tr[f];
+    else tr[f] = set[f];
+  }
+  if (isString(set.ask) && set.ask !== "") t.askedBy = c.actor as string;
   return { errors: [], ok: true };
 }
 
@@ -531,7 +582,7 @@ function doReady(state: StoreState): Result {
     .map((t, i) => ({ t, i }))
     .filter(({ t }) => t.status === "open" && t.type !== "epic" && !blocked.has(t.id))
     .sort((a, b) => a.t.priority - b.t.priority || a.i - b.i)
-    .map(({ t }) => ({ id: t.id, priority: t.priority, title: t.title, type: t.type }));
+    .map(({ t }) => ({ id: t.id, priority: t.priority, title: t.title, type: t.type, ...(t.goal !== undefined ? { goal: t.goal } : {}) }));
   return { entries, errors: [], ok: true };
 }
 
@@ -603,8 +654,9 @@ function doImport(state: StoreState, c: Command): Result {
         if (f !== "createdAt") errs.add("E_BAD_FIELD");
       } else if (!parseable(v)) errs.add("E_BAD_TIMESTAMP");
     }
-    for (const f of ["description", "assignee", "closeReason", "legacyRef", "specItemRef", "criterionId"])
+    for (const f of ["description", "assignee", "closeReason", "legacyRef", "specItemRef", "criterionId", "askedBy"])
       optString(errs, r[f]);
+    checkPlain(errs, r);
     if (r.criterionId !== undefined && r.specItemRef === undefined) errs.add("E_MISSING_FIELD");
     if (r.parent !== undefined || r.dependsOn !== undefined) errs.add("E_BAD_FIELD");
     if (r.comments !== undefined) {
@@ -683,7 +735,7 @@ function doImport(state: StoreState, c: Command): Result {
     };
     for (const f of [
       "description", "assignee", "startedAt", "closedAt", "closeReason",
-      "legacyRef", "specItemRef", "criterionId",
+      "legacyRef", "specItemRef", "criterionId", ...PLAIN_FIELDS, "askedBy",
     ] as const)
       if (raw[f] !== undefined) (task as unknown as Record<string, unknown>)[f] = raw[f];
     state.tasks.push(task);
