@@ -66,4 +66,19 @@ their own words, in one form: the answer is their comment, the task goes back
 to the agent that asked (`askedBy`, else the first of `TASKSTORE_AGENTS`, else
 `art`), and `TASKSTORE_ON_OWNER_COMMENT` wakes it.
 
+## Several writers at once
+
+Agents and lanes write the one store in parallel. Each mutation is one SQLite
+write transaction (`BEGIN IMMEDIATE`): it takes the write lock, reads the
+store, applies the core and writes back, mirror and interactions line
+included, so it always builds on the last committed write. A writer waits up
+to 30 s for the lock. A write that can't be applied (the lock never came, the
+disk is full, the mirror couldn't be written) rolls back and answers
+`ok: false` with `E_STORE`, exit 1; it is never acknowledged. The contract
+says so in it-ts-durable (`spec/taskstore-core` 0.6.0), proven by
+`fx-concurrent-writers`: 8 processes at once, 100 writes each, nothing
+acknowledged is lost. Before this (t-1831) the binding read outside the
+transaction and lost 442 of 773 acknowledged writes in that test.
+`npx tsx scripts/concurrent-bench.ts 8 100 store|cli` counts them by hand.
+
 Born in felag ceremony 2 (art-ubo.6, 2026-06-12).

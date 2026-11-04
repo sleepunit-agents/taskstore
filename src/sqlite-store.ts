@@ -123,11 +123,22 @@ function buildInteractions(
   }
 }
 
+/**
+ * How long a writer waits for another writer's transaction before it gives
+ * up and fails (SQLITE_BUSY). Writes are a few milliseconds each; a wait this
+ * long means something is wedged, and the caller hears about it as a failure.
+ */
+const BUSY_TIMEOUT_MS = 30_000;
+
 export class SqliteStore {
   private db: Database.Database;
 
   constructor(private dbPath: string) {
-    this.db = new Database(dbPath);
+    // The busy timeout goes on at open, before the first statement: setting
+    // WAL and creating the schema both take the write lock, and a second
+    // process opening the store at the same moment must wait, not throw.
+    this.db = new Database(dbPath, { timeout: BUSY_TIMEOUT_MS });
+    this.db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
@@ -157,19 +168,16 @@ export class SqliteStore {
     return state;
   }
 
+  /** The whole state back into the tables. Only ever inside run()'s write transaction. */
   private persist(state: StoreState): void {
-    const tx = this.db.transaction(() => {
-      this.db.exec("DELETE FROM tasks; DELETE FROM links;");
-      const insT = this.db.prepare("INSERT INTO tasks (ord, id, record) VALUES (?, ?, ?)");
-      state.tasks.forEach((t, i) => insT.run(i, t.id, JSON.stringify(t)));
-      const insL = this.db.prepare("INSERT INTO links (ord, record) VALUES (?, ?)");
-      state.links.forEach((l, i) => insL.run(i, JSON.stringify(l)));
-      this.db
-        .prepare("INSERT INTO meta (key, value) VALUES ('seq', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(String(state.seq));
-    });
-    tx();
-    this.mirror(state);
+    this.db.exec("DELETE FROM tasks; DELETE FROM links;");
+    const insT = this.db.prepare("INSERT INTO tasks (ord, id, record) VALUES (?, ?, ?)");
+    state.tasks.forEach((t, i) => insT.run(i, t.id, JSON.stringify(t)));
+    const insL = this.db.prepare("INSERT INTO links (ord, record) VALUES (?, ?)");
+    state.links.forEach((l, i) => insL.run(i, JSON.stringify(l)));
+    this.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('seq', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(String(state.seq));
   }
 
   /** Passive append-only interactions log: one mutation record per line. */
@@ -179,26 +187,52 @@ export class SqliteStore {
     appendFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
 
-  /** Passive JSONL mirror: one task record per line, then one link record per line. */
-  private mirror(state: StoreState): void {
+  /**
+   * Passive JSONL mirror: one task record per line, then one link record per
+   * line. Written to a temp file of this process's own, and returned as a
+   * commit step (the rename) so run() can put it last. The temp name used to
+   * be shared: two writers' renames raced, and the loser threw ENOENT after
+   * its write had committed — a write in the store reported as a failure.
+   */
+  private stageMirror(state: StoreState): () => void {
     const path = this.dbPath.replace(/\.db$/, "") + ".export.jsonl";
     const lines = [
       ...state.tasks.map((t) => JSON.stringify({ record: "task", ...t })),
       ...state.links.map((l) => JSON.stringify({ record: "link", ...l })),
     ];
-    const tmp = path + ".tmp";
+    const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, lines.join("\n") + (lines.length ? "\n" : ""));
-    renameSync(tmp, path);
+    return () => renameSync(tmp, path);
   }
 
+  /**
+   * One command. A mutation is one write transaction, BEGIN IMMEDIATE: it
+   * takes the store's write lock first, THEN reads the state, applies the
+   * core and writes back — so it always applies to what the last writer
+   * committed. It used to read outside any transaction and write the whole
+   * state back from that copy: under concurrent writers every write landing
+   * between the read and the write was overwritten while its writer had
+   * already been told ok (t-1831: ~20 of ~450 lost on the live store,
+   * 2026-11-04; 442 of 773 in the 8x100 test before this change).
+   *
+   * The mirror and the interactions line are written inside the same
+   * transaction, under the same lock, so they follow commit order. Anything
+   * that fails — the lock not coming within BUSY_TIMEOUT_MS, a full disk —
+   * throws, the transaction rolls back, and the caller never sees ok.
+   */
   run(command: Command): Result {
-    const prev = this.load();
-    const { result, state } = apply(prev, command);
-    if (result.ok === true && MUTATION_OPS.has(command.op)) {
+    if (!MUTATION_OPS.has(command.op)) return apply(this.load(), command).result;
+    const write = this.db.transaction(() => {
+      const prev = this.load();
+      const { result, state } = apply(prev, command);
+      if (result.ok !== true) return result; // nothing changes, nothing written
       this.persist(state);
+      const publishMirror = this.stageMirror(state);
       this.appendInteractions(buildInteractions(command, prev, state, result));
-    }
-    return result;
+      publishMirror();
+      return result;
+    });
+    return write.immediate();
   }
 
   close(): void {
