@@ -3,7 +3,7 @@
 // side"):
 //
 //   loom-tasks project-feed --json --project <slug> --since <iso>
-//              [--epic <id>] [--name <alias>]... [--venue <v>]...
+//              [--epic <id>] [--name <alias>]... [--venue <v>]... [--repo <r>]...
 //
 // The project's tree is the --epic task's descendants over parent-child
 // links. Its tasks go in four groups: waiting on the owner (open or in
@@ -13,7 +13,8 @@
 // groups too, with status "outside the tree". An item's body is the task's
 // description, and it always keeps any conversation digest id (`dg-…`) the
 // description cites, so the tasks and conversations sections cross-reference
-// by text. --venue is accepted and unused: a task has no venue.
+// by text. --venue and --repo are accepted and unused: a task has no venue, and a project's repos are the
+// Changes piece's (loom docs/specs/projects.md passes every feed --repo for each repo selector).
 //
 // Pure, like loom-ui.ts: the CLI reads the store (export + ready) into a
 // FeedView and prints feed()'s answer. The output keeps loom's caps: at most
@@ -204,14 +205,15 @@ export function parseFeedArgs(argv: readonly string[]): FeedArgs | string {
     const flag = argv[i];
     if (flag === "--json") continue;
     const value = argv[i + 1];
-    if (!["--project", "--since", "--epic", "--name", "--venue"].includes(flag)) return `unknown argument ${JSON.stringify(flag)}`;
+    if (!["--project", "--since", "--epic", "--name", "--venue", "--repo"].includes(flag)) return `unknown argument ${JSON.stringify(flag)}`;
     if (value === undefined || value.startsWith("--")) return `${flag} needs a value`;
     i++;
     if (flag === "--project") out.project = value;
     else if (flag === "--since") out.since = value;
     else if (flag === "--epic") out.epic = value;
     else if (flag === "--name") out.names.push(value);
-    else out.venues.push(value);
+    else if (flag === "--venue") out.venues.push(value);
+    // --repo: accepted, unused (above).
   }
   if (!out.project) return "--project is required";
   if (!out.since) return "--since is required";

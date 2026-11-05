@@ -159,6 +159,11 @@ describe("project feed", () => {
   it("parses its arguments: --name and --venue repeat; --project and --since are required", () => {
     expect(parseFeedArgs(["--json", "--project", "pond", "--since", SINCE, "--epic", "t-1", "--name", "a", "--name", "b", "--venue", "slack:C1", "--venue", "x"]))
       .toEqual({ project: "pond", since: SINCE, epic: "t-1", names: ["a", "b"], venues: ["slack:C1", "x"] });
+    // loom passes --repo for each repo selector (projects.md): accepted, and it changes nothing here.
+    expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo", "github:onterris/on-pond", "--repo", "github:a/b"]))
+      .toEqual({ project: "pond", since: SINCE, names: [], venues: [] });
+    expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo"])).toBe("--repo needs a value");
+    expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo", "--name"])).toBe("--repo needs a value");
     expect(parseFeedArgs(["--since", SINCE])).toMatch(/--project is required/);
     expect(parseFeedArgs(["--project", "pond"])).toMatch(/--since is required/);
     expect(parseFeedArgs(["--project", "pond", "--since", "tuesday"])).toMatch(/ISO-8601/);
