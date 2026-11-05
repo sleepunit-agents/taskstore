@@ -383,7 +383,10 @@ if (verb === "ui") {
     // The Changes piece cites tasks as t-<digits> (its word rule), so only such an id can have changes; the guard
     // also keeps the argument a plain token.
     if (!isAbsolute(bin) || !/^t-[0-9]+$/.test(id) || !existsSync(bin)) return undefined;
-    const r = spawnSync(bin, ["cited-by", id, "--json"], { encoding: "utf8", timeout: 1500, stdio: ["ignore", "pipe", "ignore"] });
+    // Run as the Changes piece, not as this one: with this piece's home in its environment it would look for its
+    // snapshot under ours and find nothing (it finds its own home from where it's installed).
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "LOOM_PIECE_HOME" && k !== "LOOM_PIECE_NAME" && !k.startsWith("TASKSTORE_")));
+    const r = spawnSync(bin, ["cited-by", id, "--json"], { encoding: "utf8", timeout: 1500, stdio: ["ignore", "pipe", "ignore"], env });
     try {
       return r.status === 0 ? changeRefs(JSON.parse(r.stdout)) : undefined;
     } catch {
