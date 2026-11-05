@@ -1,6 +1,6 @@
 {
   "name": "taskstore",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
   "bin": {
     "taskstore": "dist/cli.js",
@@ -61,6 +61,10 @@
       "project": {
         "label": "Tasks",
         "argv": ["loom-tasks", "project-feed", "--json"]
+      },
+      "thread": {
+        "label": "Tasks",
+        "argv": ["loom-tasks", "thread-feed", "--json"]
       }
     }
   }

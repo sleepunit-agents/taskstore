@@ -29,6 +29,19 @@ In a loom project's hub it adds the Tasks section: `loom-tasks project-feed
 answers the `--epic` task's tree in four groups (waiting on the owner, ready,
 blocked, done since `--since`), plus open tasks outside the tree that name the
 project, each item citing any `dg-…` conversation digest its description does.
+Given `--conversation <cv>` (loom passes one per Comms thread filed under the
+project), tasks made in those threads join the project's tree.
+
+In a loom Comms thread it adds the thread's tasks to "Work in this thread":
+`loom-tasks thread-feed --json --conversation <cv> [--ref <ref>]…` (declared as
+`loom.sections.thread`, `src/thread-feed.ts`) answers each `t-N` the thread
+named and each task made in it, with its state in words. A task made in a
+thread carries `source: "conversation:<cv>"` (taskstore-core's `it-ts-source`):
+`--source` on `create` and `update` sets it, and without it a body that has
+`LOOM_BODY_CONVERSATION` in its environment gives that conversation to a create,
+and to an update of a task with no source yet. loom's `run` API carries no
+environment, so a body in a house passes `--source` itself. The task's page
+shows where it came from with a `from` block, which loom draws per viewer.
 
 Over loom's piece API (`POST /api/tasks/run`, body `{"argv": ["ready"]}`) a body
 that isn't on loom's machine, such as a house, runs any CLI command against the

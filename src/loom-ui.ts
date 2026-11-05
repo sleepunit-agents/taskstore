@@ -393,6 +393,11 @@ function isBlocked(v: UiView, id: string): boolean {
   return v.links.some((l) => l.type === "blocks" && l.id === id && v.tasks.find((t) => t.id === l.dependsOn)?.status !== "closed");
 }
 
+/** The conversation a task came from, when its source names one (conversation:cv-<12 hex>). */
+export function fromConversation(t: Task): string | undefined {
+  return /^conversation:(cv-[0-9a-f]{12})$/.exec(t.source ?? "")?.[1];
+}
+
 export function taskPage(v: UiView, id: string): Page {
   const t = v.tasks.find((x) => x.id === id);
   if (!t) return NOT_FOUND;
@@ -506,6 +511,9 @@ export function taskPage(v: UiView, id: string): Page {
         fields: [{ name: "text", label: yours ? "Your call" : "Reply", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
       }] }]),
       { id: "facts", place: "side", blocks: [{ type: "panel", rows }] },
+      // Where it came from (it-ts-source): loom draws the block, and only the thread's own member sees its title and
+      // link (loom docs/specs/comms.md, "From"). Only a conversation source has one.
+      ...(fromConversation(t) ? [{ id: "from", place: "side" as const, blocks: [{ type: "from", conversation: fromConversation(t)! }] }] : []),
       ...(v.changes?.length ? [{ id: "changes", title: "Changes", place: "side" as const, blocks: [{ type: "list", items: v.changes.map((c) => ({
         text: clip(`${c.short} ${c.title}`, TITLE_MAX), meta: clip(c.words), page: `loom:p/changes/${c.page}` })) }] }] : []),
     ],

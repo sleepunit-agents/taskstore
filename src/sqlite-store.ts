@@ -29,7 +29,7 @@ interface InteractionRecord {
 const TASK_DIFF_FIELDS = [
   "status", "title", "description", "priority", "type",
   "assignee", "startedAt", "closedAt", "closeReason",
-  "goal", "why", "doneWhen", "ask", "ifYes", "ifNo", "answers", "askedBy",
+  "goal", "why", "doneWhen", "ask", "ifYes", "ifNo", "answers", "askedBy", "source",
 ] as const;
 
 function taskFieldDiff(prev: Task, next: Task): Record<string, FieldChange> {

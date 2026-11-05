@@ -15,7 +15,10 @@
 //     until it reads plainly and has an --ask; any other is written, with
 //     "warnings" in the answer when it doesn't read plainly or has no --goal.
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
-//   taskstore update <id> --title t | --description d | --priority n | --assignee a | plain flags
+//   taskstore update <id> --title t | --description d | --priority n | --assignee a | --source s | plain flags
+//   --source <kind>:<value> (create and update): where the work came from (it-ts-source). Without it, a body
+//     running in a conversation (LOOM_BODY_CONVERSATION) gives conversation:<cv> to a create, and to an update of
+//     a task that has none; "" clears it.
 //     ("" clears a plain flag's field; --ask "" clears the ask and its parts)
 //   taskstore comment <id> "text" | comment <id> --file <path>   (--file - reads stdin)
 //     Long text belongs in a file or on stdin: inline, the shell (or a harness's
@@ -30,6 +33,8 @@
 //   taskstore project-feed --json --project <slug> --since <iso> [--epic <id>]
 //                    [--name <alias>]... [--venue <v>]...
 //                                    (loom's project hub; see src/project-feed.ts)
+//   taskstore thread-feed --json --conversation <cv-…> [--ref <ref>]...
+//                                    (a loom Comms thread's work; see src/thread-feed.ts)
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
@@ -43,6 +48,7 @@ import { changeRefs, checkAct, manifest, page, priorityWord, type ChangeRef, typ
 import { answer, type ApiRequest } from "./loom-api.js";
 import { describe as describeFinding, EXAMPLE, lint, PLAIN_RULE, type Finding, type PlainField } from "./plain.js";
 import { feed, parseFeedArgs } from "./project-feed.js";
+import { parseThreadArgs, threadFeed } from "./thread-feed.js";
 import { spawn, spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
@@ -96,13 +102,13 @@ const PLAIN_FLAGS: Record<string, string> = {
   goal: "goal", why: "why", "done-when": "doneWhen", ask: "ask", "if-yes": "ifYes", "if-no": "ifNo", answers: "answers",
 };
 const KNOWN_FLAGS: Record<string, Set<string>> = {
-  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref", ...Object.keys(PLAIN_FLAGS)]),
+  create: new Set(["description", "type", "priority", "parent", "spec-item-ref", "criterion-id", "legacy-ref", "source", ...Object.keys(PLAIN_FLAGS)]),
   claim: new Set(),
   unclaim: new Set(),
   close: new Set(["reason"]),
   reopen: new Set(),
   delete: new Set(),
-  update: new Set(["title", "description", "assignee", "priority", ...Object.keys(PLAIN_FLAGS)]),
+  update: new Set(["title", "description", "assignee", "priority", "source", ...Object.keys(PLAIN_FLAGS)]),
   comment: new Set(["file"]),
   link: new Set(["type"]),
   unlink: new Set(["type"]),
@@ -132,6 +138,16 @@ function checkKnownFlags(): void {
   }
 }
 
+/**
+ * Where a body's work comes from (it-ts-source; loom docs/specs/comms.md, "Made here"): the conversation the runtime
+ * names in a venue body's environment, as conversation:<cv>. Undefined outside one. loom's `run` API carries no
+ * environment, so a body in a house passes --source itself.
+ */
+function envSource(): string | undefined {
+  const cv = process.env.LOOM_BODY_CONVERSATION?.trim();
+  return cv && /^cv-[0-9a-f]{12}$/.test(cv) ? `conversation:${cv}` : undefined;
+}
+
 function buildCommand(): Command {
   switch (verb) {
     case "create": {
@@ -143,6 +159,8 @@ function buildCommand(): Command {
       if (flags["spec-item-ref"] !== undefined) c.specItemRef = flags["spec-item-ref"];
       if (flags["criterion-id"] !== undefined) c.criterionId = flags["criterion-id"];
       if (flags["legacy-ref"] !== undefined) c.legacyRef = flags["legacy-ref"];
+      const source = flags.source ?? envSource();
+      if (source !== undefined) c.source = source;
       for (const [flag, key] of Object.entries(PLAIN_FLAGS)) if (flags[flag] !== undefined) c[key] = flags[flag];
       return c;
     }
@@ -164,6 +182,7 @@ function buildCommand(): Command {
       for (const k of ["title", "description", "assignee"]) if (flags[k] !== undefined) set[k] = flags[k];
       if (flags.priority !== undefined) set.priority = Number(flags.priority);
       for (const [flag, key] of Object.entries(PLAIN_FLAGS)) if (flags[flag] !== undefined) set[key] = flags[flag];
+      if (flags.source !== undefined) set.source = flags.source;
       return { op: "update", id: positional[0], set, actor, at };
     }
     case "comment": {
@@ -461,6 +480,27 @@ if (verb === "ui") {
   process.exit(0);
 }
 
+// `thread-feed`: the tasks a loom Comms thread names or made (src/thread-feed.ts, loom docs/specs/comms.md "Work
+// in this thread"). A read, like project-feed. loom sends {caller} on stdin; the tasks piece's pages show every
+// signed-in member the same tasks, so the feed does too, and doesn't read it.
+if (verb === "thread-feed") {
+  const args = parseThreadArgs(argv);
+  if (typeof args === "string") {
+    console.error(`taskstore thread-feed: ${args}`);
+    process.exit(2);
+  }
+  if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
+    console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
+    process.exit(1);
+  }
+  const feedStore = new SqliteStore(dbPath);
+  const all = feedStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
+  feedStore.close();
+  const out = threadFeed({ tasks: all.tasks ?? [], links: all.links ?? [], ready: [], owner: process.env.TASKSTORE_OWNER?.trim() || "" }, args);
+  writeAll(JSON.stringify(out) + "\n");
+  process.exit(0);
+}
+
 // `project-feed`: the tasks section of a loom project's hub (src/project-feed.ts,
 // loom docs/specs/projects.md "Section feeds"). A read, of a store that already
 // exists (as `ui`: loom runs it from its own working directory). Its own
@@ -518,6 +558,14 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const store = new SqliteStore(dbPath);
 // Plain words (src/plain.ts): read before the write, so an owner's task that
 // doesn't read plainly is refused with nothing written.
+// An update made in a conversation gives the task that conversation as its source, when it has none yet: a task
+// keeps the first thread that made or changed it (comms.md, "Made here"). Part of the same update, so one write.
+if (command.op === "update" && typeof command.id === "string" && flags.source === undefined) {
+  const set = command.set as Record<string, unknown>;
+  const src = envSource();
+  const before = src && Object.keys(set).length ? (store.run({ op: "show", id: command.id }) as { task?: Task }).task : undefined;
+  if (src && before && before.source === undefined) set.source = src;
+}
 const plainCheck = plainWords(store, command);
 let result: Record<string, unknown>;
 if (plainCheck.refuse) {
