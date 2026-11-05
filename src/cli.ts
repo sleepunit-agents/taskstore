@@ -39,7 +39,7 @@ import Database from "better-sqlite3";
 import { dirname, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
-import { checkAct, manifest, page, priorityWord, type ReadyEntry, type UiView } from "./loom-ui.js";
+import { changeRefs, checkAct, manifest, page, priorityWord, type ChangeRef, type ReadyEntry, type UiView } from "./loom-ui.js";
 import { answer, type ApiRequest } from "./loom-api.js";
 import { describe as describeFinding, EXAMPLE, lint, PLAIN_RULE, type Finding, type PlainField } from "./plain.js";
 import { feed, parseFeedArgs } from "./project-feed.js";
@@ -374,8 +374,27 @@ if (verb === "ui") {
     };
   };
   let out: unknown;
+  // A task's page lists the changes that cite it when the Changes piece is installed (loom docs/specs/changes.md,
+  // "Linked tasks"): `loom-changes cited-by <id> --json`, read-only, 1.5 s at most; anything else means no section.
+  const citedBy = (id: string): ChangeRef[] | undefined => {
+    const home = process.env.LOOM_HOME || join(process.env.HOME ?? "", ".config", "loom");
+    const bin = process.env.TASKSTORE_CHANGES || join(home, "pieces", "bin", "loom-changes");
+    if (!/^t-[0-9]+$/.test(id) || !existsSync(bin)) return undefined;
+    const r = spawnSync(bin, ["cited-by", id, "--json"], { encoding: "utf8", timeout: 1500, stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      return r.status === 0 ? changeRefs(JSON.parse(r.stdout)) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   if (sub === "") out = manifest(read());
-  else if (sub === "page") out = page(read(), request());
+  else if (sub === "page") {
+    const req = request();
+    const path = req && typeof req === "object" ? (req as { path?: unknown }).path : undefined;
+    const m = typeof path === "string" ? /^task\/([^/]+)$/.exec(path) : null;
+    const changes = m ? citedBy(m[1]) : undefined;
+    out = page({ ...read(), ...(changes ? { changes } : {}) }, req);
+  }
   else {
     const req = request();
     const check = checkAct(read(), req);

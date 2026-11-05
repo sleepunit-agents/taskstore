@@ -6,7 +6,7 @@ import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply, emptyState, type Command, type StoreState, type Task } from "../src/core.js";
-import { checkAct, humanDate, manifest, page, NOT_FOUND, type UiView } from "../src/loom-ui.js";
+import { changeRefs, checkAct, humanDate, manifest, page, NOT_FOUND, type UiView } from "../src/loom-ui.js";
 
 const AT = "2026-10-24T17:09:00Z";
 
@@ -539,5 +539,20 @@ describe("ui act answer (the CLI verb)", () => {
     expect(t.comments).toEqual([{ actor: "jonathan", at: expect.any(String), text: "Yes, to: Can you plug the backup drive in?\nIf yes, you said: I start the first backup.\n\nIt's the blue one." }]);
     // Answered: a second Yes finds nothing waiting.
     expect(JSON.parse(run(["ui", "act", "--json"], JSON.stringify({ action: "answer", fields: { id: "t-1", answer: "yes" } }), env).stdout)).toMatchObject({ ok: false });
+  });
+});
+
+describe("a task's changes (loom docs/specs/changes.md, Linked tasks)", () => {
+  const ref = { id: "github:acme/app#12", short: "app#12", title: "Fix it", words: "CI green, Waiting on you", page: "c/github/acme/app/12" };
+  it("lists the changes that cite the task in a side section, each linking to its page in the Changes piece", () => {
+    const p = page({ ...view(base()), changes: [ref] }, { path: "task/t-1" });
+    const s = section(p, "changes")!;
+    expect(s.side).toBe(true);
+    expect(s.blocks[0]).toEqual({ type: "list", items: [{ text: "app#12 Fix it", meta: "CI green, Waiting on you", page: "loom:p/changes/c/github/acme/app/12" }] });
+    expect(section(page(view(base()), { path: "task/t-1" }), "changes")).toBeUndefined();
+  });
+  it("keeps only well-formed rows from the Changes piece's answer", () => {
+    expect(changeRefs([ref, { ...ref, page: "../x" }, { ...ref, page: "//evil" }, { ...ref, page: "C/X" }, { ...ref, title: 3 }, "x", null])).toEqual([ref]);
+    expect(changeRefs({ not: "a list" })).toEqual([]);
   });
 });
