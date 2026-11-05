@@ -584,8 +584,13 @@ describe("a task's changes (loom docs/specs/changes.md, Linked tasks)", () => {
     it("loom-changes runs as itself: none of this piece's home, name or settings in its environment", () => {
       const seen = join(dir, "env");
       const bin = script("envcheck", `env > ${seen}; echo '[]'`);
-      run({ TASKSTORE_CHANGES: bin, LOOM_PIECE_HOME: "/pieces/tasks", LOOM_PIECE_NAME: "tasks", LOOM_HOME: "/the/loom" });
+      const r = run({ TASKSTORE_CHANGES: bin, LOOM_PIECE_HOME: "/pieces/tasks", LOOM_PIECE_NAME: "tasks", LOOM_HOME: "/the/loom", SOME_OTHER: "kept" });
+      // The page itself still read its own store (its TASKSTORE_DB untouched in this process).
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout).title).toBe("Ship it");
       const env = readFileSync(seen, "utf8");
+      expect(env).toMatch(/^SOME_OTHER=kept$/m);
+      expect(env).toMatch(/^PATH=/m);
       expect(env).not.toMatch(/^LOOM_PIECE_(HOME|NAME)=/m);
       expect(env).not.toMatch(/^TASKSTORE_/m);
       expect(env).toMatch(/^LOOM_HOME=\/the\/loom$/m);
