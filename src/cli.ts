@@ -17,7 +17,9 @@
 //   taskstore claim <id> | close <id> [--reason r] | reopen <id> | delete <id>
 //   taskstore update <id> --title t | --description d | --priority n | --assignee a | plain flags
 //     ("" clears a plain flag's field; --ask "" clears the ask and its parts)
-//   taskstore comment <id> "text"
+//   taskstore comment <id> "text" | comment <id> --file <path>   (--file - reads stdin)
+//     Long text belongs in a file or on stdin: inline, the shell (or a harness's
+//     command checker) has to read backticks and $( ) inside the quotes.
 //   taskstore link <id> <dependsOn> --type blocks|parent-child
 //   taskstore unlink <id> <dependsOn> --type blocks|parent-child
 //     exit 0 removed, 3 valid but no such edge, 1 rejected, 2 usage
@@ -101,7 +103,7 @@ const KNOWN_FLAGS: Record<string, Set<string>> = {
   reopen: new Set(),
   delete: new Set(),
   update: new Set(["title", "description", "assignee", "priority", ...Object.keys(PLAIN_FLAGS)]),
-  comment: new Set(),
+  comment: new Set(["file"]),
   link: new Set(["type"]),
   unlink: new Set(["type"]),
   show: new Set(),
@@ -164,8 +166,30 @@ function buildCommand(): Command {
       for (const [flag, key] of Object.entries(PLAIN_FLAGS)) if (flags[flag] !== undefined) set[key] = flags[flag];
       return { op: "update", id: positional[0], set, actor, at };
     }
-    case "comment":
+    case "comment": {
+      // --file <path>, or --file - for stdin: the text as it is, no shell quoting.
+      // Not both: a text and a file would leave which one landed to a guess.
+      if (flags.file !== undefined) {
+        if (positional[1] !== undefined) {
+          console.error("taskstore: comment takes its text inline or from --file, not both");
+          process.exit(2);
+        }
+        if (flags.file === "") {
+          console.error("taskstore: --file needs a path (or - for stdin)");
+          process.exit(2);
+        }
+        let text: string;
+        try {
+          text = readFileSync(flags.file === "-" ? 0 : flags.file, "utf8");
+        } catch (err) {
+          console.error(`taskstore: can't read --file ${flags.file}: ${(err as Error).message}`);
+          process.exit(1);
+        }
+        // One trailing newline is the file's (a heredoc, an editor), not the comment's.
+        return { op: "comment", id: positional[0], text: text.replace(/\r?\n$/, ""), actor, at };
+      }
       return { op: "comment", id: positional[0], text: positional[1], actor, at };
+    }
     // --type is passed through ABSENT when absent. It used to default to
     // "blocks", which meant a missing flag silently built the edge that gates
     // the ready queue; the core has always required the field (E_MISSING_FIELD)
