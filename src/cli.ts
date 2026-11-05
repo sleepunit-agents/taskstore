@@ -34,9 +34,9 @@
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import Database from "better-sqlite3";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Command, Link, Task } from "./core.js";
 import { changeRefs, checkAct, manifest, page, priorityWord, type ChangeRef, type ReadyEntry, type UiView } from "./loom-ui.js";
@@ -377,9 +377,12 @@ if (verb === "ui") {
   // A task's page lists the changes that cite it when the Changes piece is installed (loom docs/specs/changes.md,
   // "Linked tasks"): `loom-changes cited-by <id> --json`, read-only, 1.5 s at most; anything else means no section.
   const citedBy = (id: string): ChangeRef[] | undefined => {
-    const home = process.env.LOOM_HOME || join(process.env.HOME ?? "", ".config", "loom");
+    // Only an absolute path is ever run: never one resolved against the working directory.
+    const home = process.env.LOOM_HOME || join(homedir(), ".config", "loom");
     const bin = process.env.TASKSTORE_CHANGES || join(home, "pieces", "bin", "loom-changes");
-    if (!/^t-[0-9]+$/.test(id) || !existsSync(bin)) return undefined;
+    // The Changes piece cites tasks as t-<digits> (its word rule), so only such an id can have changes; the guard
+    // also keeps the argument a plain token.
+    if (!isAbsolute(bin) || !/^t-[0-9]+$/.test(id) || !existsSync(bin)) return undefined;
     const r = spawnSync(bin, ["cited-by", id, "--json"], { encoding: "utf8", timeout: 1500, stdio: ["ignore", "pipe", "ignore"] });
     try {
       return r.status === 0 ? changeRefs(JSON.parse(r.stdout)) : undefined;

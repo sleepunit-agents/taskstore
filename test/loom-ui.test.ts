@@ -2,11 +2,11 @@
 // "The page"): `ui --json` manifest, `ui page --json`, `ui act --json`.
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply, emptyState, type Command, type StoreState, type Task } from "../src/core.js";
-import { changeRefs, checkAct, humanDate, manifest, page, NOT_FOUND, type UiView } from "../src/loom-ui.js";
+import { CHANGES_SHOWN, changeRefs, checkAct, humanDate, manifest, page, NOT_FOUND, type UiView } from "../src/loom-ui.js";
 
 const AT = "2026-10-24T17:09:00Z";
 
@@ -554,5 +554,50 @@ describe("a task's changes (loom docs/specs/changes.md, Linked tasks)", () => {
   it("keeps only well-formed rows from the Changes piece's answer", () => {
     expect(changeRefs([ref, { ...ref, page: "../x" }, { ...ref, page: "//evil" }, { ...ref, page: "C/X" }, { ...ref, title: 3 }, "x", null])).toEqual([ref]);
     expect(changeRefs({ not: "a list" })).toEqual([]);
+  });
+  it("shows at most CHANGES_SHOWN", () => {
+    expect(changeRefs(Array.from({ length: 30 }, (_, i) => ({ ...ref, id: `x#${i}` }))).length).toBe(CHANGES_SHOWN);
+  });
+
+  describe("the CLI reads them from loom-changes cited-by, bounded, and the page is unchanged without it", () => {
+    const repo = join(__dirname, "..");
+    const cli = join(repo, "dist", "cli.js");
+    const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("TASKSTORE_")));
+    let db = "";
+    let dir = "";
+    const run = (extra: Record<string, string>, path = "task/t-1") =>
+      spawnSync(process.execPath, [cli, "ui", "page", "--json"], { encoding: "utf8", input: JSON.stringify({ path }),
+        env: { ...baseEnv, TASKSTORE_DB: db, LOOM_HOME: join(dir, "loom"), ...extra } });
+    const ids = (r: ReturnType<typeof run>) => (JSON.parse(r.stdout).sections as Array<{ id: string }>).map((x) => x.id);
+    const script = (name: string, body: string) => {
+      const p = join(dir, name);
+      writeFileSync(p, `#!/bin/sh\n${body}\n`);
+      chmodSync(p, 0o755);
+      return p;
+    };
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), "taskstore-changes-"));
+      db = join(dir, "store.db");
+      expect(spawnSync(process.execPath, [cli, "create", "Ship it", "--goal", "It ships.", "--why", "It's done."], { encoding: "utf8", env: { ...baseEnv, TASKSTORE_DB: db } }).status).toBe(0);
+    }, 60000);
+
+    it("a good answer draws the section; it's asked exactly cited-by <id> --json", () => {
+      const seen = join(dir, "argv");
+      const bin = script("good", `printf '%s ' "$@" > ${seen}; echo '${JSON.stringify([ref])}'`);
+      expect(ids(run({ TASKSTORE_CHANGES: bin }))).toContain("changes");
+      expect(readFileSync(seen, "utf8")).toBe("cited-by t-1 --json ");
+    });
+
+    it("absent, failing, slow, garbage or relative: exactly the page without it", () => {
+      const without = ids(run({}));
+      expect(without).not.toContain("changes");
+      for (const bin of [join(dir, "missing"), script("fails", "exit 3"), script("garbage", "echo nope"), script("slow", `sleep 5; echo '${JSON.stringify([ref])}'`), "relative/loom-changes"]) {
+        const t0 = Date.now();
+        const r = run({ TASKSTORE_CHANGES: bin });
+        expect(r.status, bin).toBe(0);
+        expect(ids(r), bin).toEqual(without);
+        expect(Date.now() - t0, bin).toBeLessThan(4000);
+      }
+    }, 30000);
   });
 });

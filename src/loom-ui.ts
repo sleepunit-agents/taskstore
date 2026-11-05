@@ -39,6 +39,9 @@ export interface UiView {
   changes?: ChangeRef[];
 }
 
+/** At most this many changes on a task's side column: a side section is a glance, not the list (that's Changes). */
+export const CHANGES_SHOWN = 20;
+
 /** A change that cites a task, as `loom-changes cited-by <id> --json` answers it. */
 export interface ChangeRef { id: string; short: string; title: string; words: string; page: string }
 
@@ -47,7 +50,7 @@ export function changeRefs(v: unknown): ChangeRef[] {
   if (!Array.isArray(v)) return [];
   return v.filter((c): c is ChangeRef => typeof c === "object" && c !== null
     && ["id", "short", "title", "words", "page"].every((k) => typeof (c as Record<string, unknown>)[k] === "string")
-    && /^[a-z0-9._~-]+(\/[a-z0-9._~-]+)*$/.test((c as ChangeRef).page) && !(c as ChangeRef).page.split("/").includes("..")).slice(0, 20);
+    && /^[a-z0-9._~-]+(\/[a-z0-9._~-]+)*$/.test((c as ChangeRef).page) && !(c as ChangeRef).page.split("/").includes("..")).slice(0, CHANGES_SHOWN);
 }
 
 type Block = Record<string, unknown> & { type: string };
