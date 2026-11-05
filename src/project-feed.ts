@@ -39,6 +39,8 @@ export interface FeedArgs {
   epic?: string;
   names: string[];
   venues: string[];
+  /** Conversations of the project's filed Comms threads: tasks made in them join the project (loom comms.md, "Project hubs"). */
+  conversations?: string[];
 }
 
 export interface FeedItem { title: string; when?: string; status?: string; ref?: string; body?: string }
@@ -158,6 +160,9 @@ function capGroups(groups: Array<{ title: string; items: FeedItem[] }>): FeedGro
 /** The feed for one project: the four groups that have anything in them, in order. */
 export function feed(v: FeedView, a: FeedArgs): Feed {
   const tree = treeOf(v.links, a.epic);
+  // A task made in one of the project's threads belongs to it as a tree task does.
+  const threads = new Set((a.conversations ?? []).map((c) => `conversation:${c}`));
+  if (threads.size) for (const t of v.tasks) if (t.source && threads.has(t.source) && t.id !== a.epic) tree.add(t.id);
   const names = [a.project, ...a.names];
   const blockers = new Map<string, string[]>();
   for (const l of v.links) {
@@ -205,7 +210,7 @@ export function parseFeedArgs(argv: readonly string[]): FeedArgs | string {
     const flag = argv[i];
     if (flag === "--json") continue;
     const value = argv[i + 1];
-    if (!["--project", "--since", "--epic", "--name", "--venue", "--repo"].includes(flag)) return `unknown argument ${JSON.stringify(flag)}`;
+    if (!["--project", "--since", "--epic", "--name", "--venue", "--repo", "--conversation"].includes(flag)) return `unknown argument ${JSON.stringify(flag)}`;
     if (value === undefined || value.startsWith("--")) return `${flag} needs a value`;
     i++;
     if (flag === "--project") out.project = value;
@@ -213,6 +218,10 @@ export function parseFeedArgs(argv: readonly string[]): FeedArgs | string {
     else if (flag === "--epic") out.epic = value;
     else if (flag === "--name") out.names.push(value);
     else if (flag === "--venue") out.venues.push(value);
+    else if (flag === "--conversation") {
+      if (!/^cv-[0-9a-f]{12}$/.test(value)) return `--conversation is a conversation id, not ${JSON.stringify(value)}`;
+      (out.conversations ??= []).push(value);
+    }
     // --repo: accepted, unused (above).
   }
   if (!out.project) return "--project is required";

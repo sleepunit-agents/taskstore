@@ -215,7 +215,10 @@ describe("taskstore project-feed (the CLI verb)", () => {
 
   it("package.json declares the feed for loom, with its own bin", () => {
     const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
-    expect(pkg.loom.sections).toEqual({ project: { label: "Tasks", argv: ["loom-tasks", "project-feed", "--json"] } });
+    expect(pkg.loom.sections).toEqual({
+      project: { label: "Tasks", argv: ["loom-tasks", "project-feed", "--json"] },
+      thread: { label: "Tasks", argv: ["loom-tasks", "thread-feed", "--json"] },
+    });
     expect(Object.keys(pkg.bin)).toContain("loom-tasks");
   });
 });

@@ -43,6 +43,9 @@ export interface Task {
   ifNo?: string;
   answers?: Answers;
   askedBy?: string;
+  // Where the work came from (it-ts-source): <kind>:<value>, like
+  // conversation:cv-0123456789ab, the conversation a body made or changed it in.
+  source?: string;
 }
 
 export type Answers = "yes-no" | "words";
@@ -72,7 +75,9 @@ const ANSWERS: readonly string[] = ["yes-no", "words"];
 export const PLAIN_FIELDS = ["goal", "why", "doneWhen", "ask", "ifYes", "ifNo", "answers"] as const;
 /** Held only beside an ask. */
 const ASK_PARTS = ["ifYes", "ifNo", "answers"] as const;
-const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title", ...PLAIN_FIELDS];
+const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title", ...PLAIN_FIELDS, "source"];
+/** A source (it-ts-source): a kind (lowercase letters, digits and -, a letter first, at most 32), a colon, and 1-200 non-space characters. */
+export const SOURCE = /^[a-z][a-z0-9-]{0,31}:\S{1,200}$/;
 /** The fields `search` matches (and loom's page's "Find a task", src/loom-ui.ts). */
 export const SEARCH_FIELDS: readonly string[] = [
   "id", "title", "description", "specItemRef", "criterionId", "legacyRef", "goal", "why", "ask",
@@ -154,6 +159,12 @@ function optString(errs: Errs, v: unknown): boolean {
 function checkPlain(errs: Errs, c: Record<string, unknown>): void {
   for (const f of PLAIN_FIELDS) optString(errs, c[f]);
   if (isString(c.answers) && c.answers !== "" && !ANSWERS.includes(c.answers)) errs.add("E_BAD_FIELD");
+}
+
+/** source, as given: absent, "" (absent on create, a clear on update), or a well-formed <kind>:<value>. */
+function checkSource(errs: Errs, v: unknown): void {
+  if (v === undefined || v === "") return;
+  if (!isString(v) || !SOURCE.test(v)) errs.add("E_BAD_FIELD");
 }
 
 function clone<T>(v: T): T {
@@ -307,6 +318,7 @@ function doCreate(state: StoreState, c: Command): Result {
   optString(errs, c.criterionId);
   optString(errs, c.legacyRef);
   checkPlain(errs, c);
+  checkSource(errs, c.source);
   if (!(isString(c.ask) && c.ask !== "") && ASK_PARTS.some((f) => isString(c[f]) && c[f] !== "")) errs.add("E_MISSING_FIELD");
   if (c.type !== undefined && !(isString(c.type) && TYPES.includes(c.type)))
     errs.add("E_BAD_TYPE");
@@ -342,6 +354,7 @@ function doCreate(state: StoreState, c: Command): Result {
   if (c.criterionId !== undefined) task.criterionId = c.criterionId as string;
   for (const f of PLAIN_FIELDS) if (isString(c[f]) && c[f] !== "") (task as unknown as Record<string, unknown>)[f] = c[f];
   if (task.ask !== undefined) task.askedBy = c.actor as string;
+  if (isString(c.source) && c.source !== "") task.source = c.source;
   state.tasks.push(task);
   if (isString(c.parent)) state.links.push({ id, dependsOn: c.parent, type: "parent-child" });
   return { created: true, errors: [], id, ok: true };
@@ -423,6 +436,7 @@ function doUpdate(state: StoreState, c: Command): Result {
       } else if (!isString(v)) errs.add("E_BAD_FIELD");
     }
     checkPlain(errs, c.set);
+    checkSource(errs, c.set.source);
   }
   const task = isString(c.id) ? findTask(state, c.id) : undefined;
   if (isString(c.id) && task === undefined) errs.add("E_UNKNOWN_ID");
@@ -450,6 +464,8 @@ function doUpdate(state: StoreState, c: Command): Result {
     else tr[f] = set[f];
   }
   if (isString(set.ask) && set.ask !== "") t.askedBy = c.actor as string;
+  if (set.source === "") delete t.source;
+  else if (isString(set.source)) t.source = set.source;
   return { errors: [], ok: true };
 }
 
@@ -658,6 +674,8 @@ function doImport(state: StoreState, c: Command): Result {
     for (const f of ["description", "assignee", "closeReason", "legacyRef", "specItemRef", "criterionId", "askedBy"])
       optString(errs, r[f]);
     checkPlain(errs, r);
+    // A held source is never empty, so an imported one isn't either.
+    if (r.source !== undefined && (r.source === "" || !isString(r.source) || !SOURCE.test(r.source))) errs.add("E_BAD_FIELD");
     if (r.criterionId !== undefined && r.specItemRef === undefined) errs.add("E_MISSING_FIELD");
     if (r.parent !== undefined || r.dependsOn !== undefined) errs.add("E_BAD_FIELD");
     if (r.comments !== undefined) {
@@ -736,7 +754,7 @@ function doImport(state: StoreState, c: Command): Result {
     };
     for (const f of [
       "description", "assignee", "startedAt", "closedAt", "closeReason",
-      "legacyRef", "specItemRef", "criterionId", ...PLAIN_FIELDS, "askedBy",
+      "legacyRef", "specItemRef", "criterionId", ...PLAIN_FIELDS, "askedBy", "source",
     ] as const)
       if (raw[f] !== undefined) (task as unknown as Record<string, unknown>)[f] = raw[f];
     state.tasks.push(task);
