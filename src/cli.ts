@@ -295,7 +295,8 @@ if (verb === "api") {
   }
   const out = answer(request, process.env, (args, who) => {
     const r = spawnSync(process.execPath, [process.argv[1], ...args], {
-      env: { ...process.env, TASKSTORE_DB: dbPath, TASKSTORE_ACTOR: who },
+      // Never a conversation of loom's own: a call over the API is a house's, and its --source is its own (it-ts-source).
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "LOOM_BODY_CONVERSATION")), TASKSTORE_DB: dbPath, TASKSTORE_ACTOR: who },
       input: "", encoding: "utf8", timeout: 12_000, maxBuffer: 32 * 1024 * 1024,
     });
     return { exit: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.error ? String(r.error) : (r.stderr ?? "") };
@@ -481,8 +482,8 @@ if (verb === "ui") {
 }
 
 // `thread-feed`: the tasks a loom Comms thread names or made (src/thread-feed.ts, loom docs/specs/comms.md "Work
-// in this thread"). A read, like project-feed. loom sends {caller} on stdin; the tasks piece's pages show every
-// signed-in member the same tasks, so the feed does too, and doesn't read it.
+// in this thread"). A read, like project-feed. loom sends {caller} on stdin: the tasks piece's pages show every
+// signed-in member the same tasks, so the feed does too, and reads the caller only to say "you" to the owner alone.
 if (verb === "thread-feed") {
   const args = parseThreadArgs(argv);
   if (typeof args === "string") {
@@ -493,10 +494,16 @@ if (verb === "thread-feed") {
     console.error(`taskstore: no store at ${dbPath} (set TASKSTORE_DB)`);
     process.exit(1);
   }
+  let viewer: string | undefined;
+  try {
+    // From a terminal there's no caller to wait for.
+    const who = process.stdin.isTTY ? undefined : (JSON.parse(readFileSync(0, "utf8")) as { caller?: { who?: unknown } }).caller?.who;
+    if (typeof who === "string") viewer = who;
+  } catch { /* no caller: as the owner reads it */ }
   const feedStore = new SqliteStore(dbPath);
   const all = feedStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
   feedStore.close();
-  const out = threadFeed({ tasks: all.tasks ?? [], links: all.links ?? [], ready: [], owner: process.env.TASKSTORE_OWNER?.trim() || "" }, args);
+  const out = threadFeed({ tasks: all.tasks ?? [], links: all.links ?? [], owner: process.env.TASKSTORE_OWNER?.trim() || "", viewer }, args);
   writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
 }

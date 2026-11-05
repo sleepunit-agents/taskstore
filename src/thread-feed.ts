@@ -16,6 +16,8 @@ export interface ThreadItem {
   title: string; ref: string; status: string; tone?: "bad" | "warn" | "ok"; when?: string; page?: string; made?: true;
 }
 export interface ThreadArgs { conversation: string; refs: string[] }
+/** The tasks, links and owner a thread feed reads (no ready queue), and who's looking (loom's caller.who). */
+export interface ThreadView { tasks: Task[]; links: FeedView["links"]; owner: string; viewer?: string }
 
 export const MAX_ITEMS = 50;
 const CV = /^cv-[0-9a-f]{12}$/;
@@ -29,14 +31,18 @@ const utc = (iso: string | undefined) => {
 };
 
 /** The task's state, in words, and its tone: blocked is a problem, the owner's open ask waits on them, done is done. */
-export function stateOf(t: Task, v: FeedView, blocked: boolean): { status: string; tone?: ThreadItem["tone"] } {
+export function stateOf(t: Task, v: ThreadView, blocked: boolean): { status: string; tone?: ThreadItem["tone"] } {
   if (t.status === "closed") return t.closeReason === "cancelled" ? { status: "Cancelled" } : { status: "Done", tone: "ok" };
   if (blocked) return { status: "Blocked", tone: "bad" };
-  if (v.owner && t.assignee === v.owner) return { status: "Waiting on you", tone: "warn" };
+  // The owner's call (the tasks page's "Your call"): "you" only to the owner; anyone else reads whose it is.
+  if (v.owner && t.assignee === v.owner) {
+    const mine = !v.viewer || v.viewer === v.owner;
+    return { status: clip(mine ? "Waiting on you" : `Waiting on ${v.owner[0].toUpperCase()}${v.owner.slice(1)}`, 24), tone: "warn" };
+  }
   return { status: t.status === "in_progress" ? "In progress" : "Open" };
 }
 
-export function threadFeed(v: FeedView, a: ThreadArgs): { items: ThreadItem[] } {
+export function threadFeed(v: ThreadView, a: ThreadArgs): { items: ThreadItem[] } {
   const source = `conversation:${a.conversation}`;
   const byId = new Map(v.tasks.map((t) => [t.id, t]));
   const blocked = new Set<string>();
@@ -51,7 +57,8 @@ export function threadFeed(v: FeedView, a: ThreadArgs): { items: ThreadItem[] } 
   };
   const out = new Map<string, ThreadItem>();
   // Made here first, newest first, so the cap keeps what the thread caused.
-  const made = v.tasks.filter((t) => t.source === source).reverse();
+  // A ref is at most 200 characters in loom's answer: an imported task with a longer id is left out, not the section.
+  const made = v.tasks.filter((t) => t.source === source && t.id.length <= 200).reverse();
   for (const t of made) out.set(t.id, item(t, true));
   for (const r of a.refs) {
     const t = TASK_REF.test(r) ? byId.get(r) : undefined;
@@ -72,6 +79,7 @@ export function parseThreadArgs(argv: readonly string[]): ThreadArgs | string {
     i++;
     if (flag === "--conversation") out.conversation = value;
     else if (out.refs.length < 200) out.refs.push(value);
+    else return "at most 200 --ref";
   }
   if (!CV.test(out.conversation)) return "--conversation is a conversation id (cv- and 12 hex digits)";
   return out;

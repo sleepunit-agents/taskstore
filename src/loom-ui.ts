@@ -401,6 +401,7 @@ export function fromConversation(t: Task): string | undefined {
 export function taskPage(v: UiView, id: string): Page {
   const t = v.tasks.find((x) => x.id === id);
   if (!t) return NOT_FOUND;
+  const from = fromConversation(t);
   const date = (s?: string) => humanDate(s, v.now, v.timeZone);
   const title = (tid: string) => v.tasks.find((x) => x.id === tid)?.title;
 
@@ -513,7 +514,7 @@ export function taskPage(v: UiView, id: string): Page {
       { id: "facts", place: "side", blocks: [{ type: "panel", rows }] },
       // Where it came from (it-ts-source): loom draws the block, and only the thread's own member sees its title and
       // link (loom docs/specs/comms.md, "From"). Only a conversation source has one.
-      ...(fromConversation(t) ? [{ id: "from", place: "side" as const, blocks: [{ type: "from", conversation: fromConversation(t)! }] }] : []),
+      ...(from ? [{ id: "from", place: "side" as const, blocks: [{ type: "from", conversation: from }] }] : []),
       ...(v.changes?.length ? [{ id: "changes", title: "Changes", place: "side" as const, blocks: [{ type: "list", items: v.changes.map((c) => ({
         text: clip(`${c.short} ${c.title}`, TITLE_MAX), meta: clip(c.words), page: `loom:p/changes/${c.page}` })) }] }] : []),
     ],

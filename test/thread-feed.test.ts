@@ -25,6 +25,7 @@ function state(ops: Array<Record<string, unknown>>): StoreState {
   return s;
 }
 const view = (s: StoreState) => ({ tasks: s.tasks, links: s.links, ready: [], owner: "jonathan" });
+const at = (m: number) => `2026-11-05T12:${String(m).padStart(2, "0")}:00Z`;
 
 describe("thread-feed (pure)", () => {
   const s = state([
@@ -59,10 +60,38 @@ describe("thread-feed (pure)", () => {
     expect(threadFeed(view(many), { conversation: CV, refs: [] }).items).toHaveLength(50);
   });
 
+  it("when is closedAt, else startedAt, else createdAt; in progress reads so; an ask on an agent's task isn't yours", () => {
+    let st = emptyState();
+    const run = (op: Record<string, unknown>, m: number) => { st = apply(st, { actor: "art", at: at(m), ...op } as Command).state; };
+    run({ op: "create", title: "opened", source: `conversation:${CV}` }, 1);            // t-1
+    run({ op: "create", title: "started", source: `conversation:${CV}` }, 2);           // t-2
+    run({ op: "claim", id: "t-2" }, 3);
+    run({ op: "create", title: "finished", source: `conversation:${CV}` }, 4);          // t-3
+    run({ op: "claim", id: "t-3" }, 5);
+    run({ op: "close", id: "t-3" }, 6);
+    run({ op: "create", title: "an agent's ask", source: `conversation:${CV}`, ask: "Go?" }, 7); // t-4, assigned to nobody
+    const by = Object.fromEntries(threadFeed(view(st), { conversation: CV, refs: [] }).items.map((i) => [i.ref, i]));
+    expect([by["t-1"].when, by["t-2"].when, by["t-3"].when]).toEqual([at(1), at(3), at(6)]);
+    expect(by["t-2"].status).toBe("In progress");
+    expect(by["t-4"].status).toBe("Open");
+  });
+
+  it("the owner's call says you only to the owner", () => {
+    const owner = threadFeed(view(s), { conversation: CV, refs: [] }).items.find((i) => i.ref === "t-4")!;
+    const sam = threadFeed({ ...view(s), viewer: "sam" }, { conversation: CV, refs: [] }).items.find((i) => i.ref === "t-4")!;
+    expect([owner.status, sam.status]).toEqual(["Waiting on you", "Waiting on Jonathan"]);
+  });
+
+  it("a task both named and made is one item, made", () => {
+    const f2 = threadFeed(view(s), { conversation: CV, refs: ["t-2", "t-2"] });
+    expect(f2.items.filter((i) => i.ref === "t-2")).toEqual([expect.objectContaining({ made: true })]);
+  });
+
   it("parses loom's argv and refuses anything else", () => {
     expect(parseThreadArgs(["--json", "--conversation", CV, "--ref", "t-1", "--ref", "t-2"])).toEqual({ conversation: CV, refs: ["t-1", "t-2"] });
     expect(parseThreadArgs(["--conversation", "cv-nope"])).toMatch(/conversation id/);
     expect(parseThreadArgs(["--conversation", CV, "--project", "p"])).toMatch(/unknown argument/);
+    expect(parseThreadArgs(["--conversation", CV, ...Array.from({ length: 201 }, (_, i) => ["--ref", `t-${i}`]).flat()])).toMatch(/at most 200/);
   });
 
   it("the project feed takes the project's threads: a task made in one joins its section", () => {
