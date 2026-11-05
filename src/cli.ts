@@ -178,15 +178,24 @@ function buildCommand(): Command {
           console.error("taskstore: --file needs a path (or - for stdin)");
           process.exit(2);
         }
-        let text: string;
+        // A rejection answers like every other one: JSON on stdout (ok: false), exit 1.
+        const reject = (code: string, message: string): never => {
+          console.error(`taskstore: ${message}`);
+          writeAll(JSON.stringify({ ok: false, errors: [code], message }, null, 2) + "\n");
+          process.exit(1);
+        };
+        let text = "";
         try {
           text = readFileSync(flags.file === "-" ? 0 : flags.file, "utf8");
         } catch (err) {
-          console.error(`taskstore: can't read --file ${flags.file}: ${(err as Error).message}`);
-          process.exit(1);
+          reject("E_FILE", `can't read --file ${flags.file}: ${(err as Error).message}`);
         }
-        // One trailing newline is the file's (a heredoc, an editor), not the comment's.
-        return { op: "comment", id: positional[0], text: text.replace(/\r?\n$/, ""), actor, at };
+        // One trailing newline is the file's (a heredoc, an editor), not the comment's: "\n", or "\r\n" from a
+        // CRLF file. Anything else is kept as written.
+        text = text.replace(/\r?\n$/, "");
+        // An empty file is most likely a redirect that produced nothing, not a comment anyone meant.
+        if (text.trim() === "") reject("E_EMPTY", `--file ${flags.file} has no text`);
+        return { op: "comment", id: positional[0], text, actor, at };
       }
       return { op: "comment", id: positional[0], text: positional[1], actor, at };
     }

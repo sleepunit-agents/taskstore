@@ -609,7 +609,7 @@ describe("comment --file", () => {
     const s = new SqliteStore(db);
     const id = s.run({ op: "create", title: "target", actor: "test", at: "2026-11-04T18:00:00.000Z" }).id as string;
     s.close();
-    const argv = args.map((a) => a.replace("{id}", id).replace("{dir}", d));
+    const argv = args.map((a) => a.replaceAll("{id}", id).replaceAll("{dir}", d));
     try {
       const stdout = execFileSync("node", [join(repo, "dist", "cli.js"), ...argv], {
         env: { ...process.env, TASKSTORE_DB: db }, input: input ?? "", stdio: ["pipe", "pipe", "pipe"],
@@ -651,10 +651,34 @@ describe("comment --file", () => {
     expect(comments(r.db, r.id)).toEqual([]);
   });
 
-  it("a file that isn't there is a failure, and writes nothing", () => {
+  it("a file that isn't there is a rejection (ok: false on stdout, exit 1), and writes nothing", () => {
     const r = run(["comment", "{id}", "--file", "{dir}/nope.md"]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/can't read --file/);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, errors: ["E_FILE"] });
     expect(comments(r.db, r.id)).toEqual([]);
+  });
+
+  it("drops exactly one trailing newline and keeps everything else as written", () => {
+    const cases: [string, string][] = [
+      ["note", "note"],                       // no trailing newline: nothing dropped
+      ["note\n\n\n", "note\n\n"],            // only one of several
+      ["  indented\n  and spaced  \n", "  indented\n  and spaced  "],
+      ["crlf\r\nlines\r\n", "crlf\r\nlines"], // a CRLF file's final line ending
+    ];
+    for (const [input, stored] of cases) {
+      const r = run(["comment", "{id}", "--file", "-"], input);
+      expect(r.status).toBe(0);
+      expect(comments(r.db, r.id)).toEqual([stored]);
+    }
+  });
+
+  it("an empty file is a rejection, and writes nothing", () => {
+    for (const input of ["", "\n", "  \n"]) {
+      const r = run(["comment", "{id}", "--file", "-"], input);
+      expect(r.status).toBe(1);
+      expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, errors: ["E_EMPTY"] });
+      expect(comments(r.db, r.id)).toEqual([]);
+    }
   });
 });
