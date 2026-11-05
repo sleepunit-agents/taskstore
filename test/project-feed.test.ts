@@ -162,6 +162,8 @@ describe("project feed", () => {
     // loom passes --repo for each repo selector (projects.md): accepted, and it changes nothing here.
     expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo", "github:onterris/on-pond", "--repo", "github:a/b"]))
       .toEqual({ project: "pond", since: SINCE, names: [], venues: [] });
+    expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo"])).toBe("--repo needs a value");
+    expect(parseFeedArgs(["--project", "pond", "--since", SINCE, "--repo", "--name"])).toBe("--repo needs a value");
     expect(parseFeedArgs(["--since", SINCE])).toMatch(/--project is required/);
     expect(parseFeedArgs(["--project", "pond"])).toMatch(/--since is required/);
     expect(parseFeedArgs(["--project", "pond", "--since", "tuesday"])).toMatch(/ISO-8601/);
