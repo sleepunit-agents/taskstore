@@ -34,6 +34,23 @@ export interface UiView {
   viewer?: string;
   /** TASKSTORE_AGENTS, in order: who an answered ask goes back to when the agent that asked isn't known. */
   agents?: string[];
+  /** The changes (pull requests) that cite this task, from the Changes piece when it's installed (loom
+   * docs/specs/changes.md, "Linked tasks"): the CLI reads them, so this file stays pure. Absent: no section. */
+  changes?: ChangeRef[];
+}
+
+/** At most this many changes on a task's side column: a side section is a glance, not the list (that's Changes). */
+export const CHANGES_SHOWN = 20;
+
+/** A change that cites a task, as `loom-changes cited-by <id> --json` answers it. */
+export interface ChangeRef { id: string; short: string; title: string; words: string; page: string }
+
+/** Keep only well-formed rows: another piece's answer is data to check, not trust. */
+export function changeRefs(v: unknown): ChangeRef[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((c): c is ChangeRef => typeof c === "object" && c !== null
+    && ["id", "short", "title", "words", "page"].every((k) => typeof (c as Record<string, unknown>)[k] === "string")
+    && /^[a-z0-9._~-]+(\/[a-z0-9._~-]+)*$/.test((c as ChangeRef).page) && !(c as ChangeRef).page.split("/").includes("..")).slice(0, CHANGES_SHOWN);
 }
 
 type Block = Record<string, unknown> & { type: string };
@@ -440,6 +457,8 @@ export function taskPage(v: UiView, id: string): Page {
         fields: [{ name: "text", label: yours ? "Your call" : "Reply", kind: "textarea", required: true, hint: `Posted as ${v.owner || "loom-page"}.` }],
       }] }]),
       { id: "facts", side: true, blocks: [{ type: "panel", rows }] },
+      ...(v.changes?.length ? [{ id: "changes", title: "Changes", side: true, blocks: [{ type: "list", items: v.changes.map((c) => ({
+        text: clip(`${c.short} ${c.title}`, TITLE_MAX), meta: clip(c.words), page: `loom:p/changes/${c.page}` })) }] }] : []),
     ],
   };
 }
