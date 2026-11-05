@@ -91,9 +91,11 @@ describe("Work page", () => {
   it("is groups, each task once: waiting on you, in progress, blocked, up next; no counts or pills", () => {
     const p = page(view(base()), { path: "", query: {} });
     expect(p.title).toBe("Tasks");
-    expect(p.sections.map((s) => [s.id, s.title, s.fold])).toEqual([
-      ["weeks", undefined, undefined], ["yours", "Waiting on you · 2", "open"], ["doing", "In progress · 1", "open"], ["blocked", "Blocked · 1", "open"],
-      ["next", "Up next · 1", "open"], ["done", "Done in the last 7 days · 1", "closed"],
+    expect(p.sections.map((s) => [s.id, s.title, s.fold, s.place])).toEqual([
+      ["yours", "Waiting on you · 2", "open", undefined], ["doing", "In progress · 1", "open", undefined], ["blocked", "Blocked · 1", "open", undefined],
+      ["next", "Up next · 1", "open", undefined], ["done", "Done in the last 7 days · 1", "closed", undefined],
+      // loom's side column: find and sort, the chart, and what moved last.
+      ["show", "Find and sort", undefined, "side"], ["weeks", "Opened and done", undefined, "side"], ["recent", "Recently updated", undefined, "side"],
     ]);
     expect(block(p, "yours", "list")!.who).toBe(true);
     expect(section(p, "yours")!.tone).toBe("warn");
@@ -103,7 +105,8 @@ describe("Work page", () => {
     expect(block(p, "doing", "list")!.items).toEqual([{ text: "doing one", meta: "Needs a plain summary · art · High · t-1", agent: "art", page: "task/t-1" }]);
     expect(block(p, "blocked", "list")!.items).toEqual([{ text: "blocked", meta: "Needs a plain summary · Waiting on t-1 · Normal · t-6", page: "task/t-6" }]);
     expect(block(p, "next", "list")!.items).toEqual([{ text: "urgent ready", meta: "Needs a plain summary · Urgent · t-2", page: "task/t-2" }]);
-    expect(p.sections.some((s) => s.blocks.some((b) => b.type === "stats" || b.type === "filters"))).toBe(false);
+    // The main column is the list: no stats, no chart and no filters in it.
+    expect(p.sections.filter((s) => !s.place).some((s) => s.blocks.some((b) => ["stats", "filters", "chart"].includes(b.type)))).toBe(false);
   });
 
   it("splits the ready queue by priority: up next (urgent, high), ready (normal), later (low, someday)", () => {
@@ -142,7 +145,12 @@ describe("Work page", () => {
 
   it("charts what was opened and done each week, the last 8, this one last", () => {
     const c = block(page(view(base()), { path: "" }), "weeks", "chart")!;
-    expect(c).toMatchObject({ kind: "bar", caption: "Opened and done, by week", summary: { label: "Open", value: "5", detail: "+6 this week" } });
+    expect(c).toMatchObject({ kind: "bar", caption: "By week", summary: { label: "Open", value: "5", detail: "+6 this week" } });
+    // Two series, each named and each its own colour (loom keeps them apart, and draws the names in the legend).
+    const series = c.series as Array<{ key: string; label: string; color: string }>;
+    expect(series.map((x) => x.label)).toEqual(["Opened", "Done"]);
+    expect(new Set(series.map((x) => x.color)).size).toBe(2);
+    expect(section(page(view(base()), { path: "" }), "weeks")!.place).toBe("side");
     const data = c.data as Array<Record<string, unknown>>;
     expect(data).toHaveLength(8);
     expect(data[7]).toEqual({ label: "This week", opened: 7, done: 1 });
@@ -162,7 +170,61 @@ describe("Work page", () => {
   });
 
   it("says so when there's nothing", () => {
-    expect(page(view(emptyState()), { path: "" }).sections.slice(1)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] }]);
+    expect(page(view(emptyState()), { path: "" }).sections.filter((s) => !s.place)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing open.", tone: "muted" }] }]);
+    // Nothing has moved, so nothing is recently updated.
+    expect(section(page(view(emptyState()), { path: "" }), "recent")).toBeUndefined();
+  });
+
+  it("finds tasks by id, title, goal or ask (?q=), across every group, and says when nothing matches", () => {
+    // By goal and by ask, words that are in no title or id.
+    const s = state([
+      { op: "create", title: "one", priority: 2, goal: "The backup has an offsite copy" },
+      { op: "create", title: "two", priority: 2 },
+      { op: "update", id: "t-2", set: { ask: "OK to install rclone?", assignee: "jonathan", ifYes: "I install it.", ifNo: "I don't." } },
+      { op: "create", title: "three", priority: 2 },
+    ]);
+    const found = (q: string) => page(view(s), { path: "", query: { q } }).sections.filter((x) => !x.place)
+      .flatMap((x) => (x.blocks[0].items as Array<{ page?: string }> | undefined) ?? []).map((i) => i.page);
+    expect(found("offsite")).toEqual(["task/t-1"]);
+    expect(found("RCLONE")).toEqual(["task/t-2"]);
+    const p = page(view(base()), { path: "", query: { q: "OWNER" } });
+    expect(p.intro).toBe("Finding “OWNER”");
+    expect(p.sections.filter((s) => !s.place).map((s) => s.id)).toEqual(["yours", "done"]);
+    expect(block(p, "yours", "list")!.items!.map((i) => i.page)).toEqual(["task/t-4"]);
+    expect(block(page(view(base()), { path: "", query: { q: "t-2" } }), "next", "list")!.items!.map((i) => i.page)).toEqual(["task/t-2"]);
+    const none = page(view(base()), { path: "", query: { q: "zebra" } });
+    expect(none.sections.filter((s) => !s.place)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing matches “zebra”.", tone: "muted" }] }]);
+    // The side column stays: the way to change the search is there.
+    expect(section(none, "show")!.blocks[0]).toEqual({ type: "filters", param: "sort", search: "Find a task",
+      options: [{ value: "", label: "Priority" }, { value: "new", label: "Newest" }, { value: "updated", label: "Updated" }] });
+  });
+
+  it("sorts each group (?sort=): by priority as the groups have it, newest first, or most recently touched first", () => {
+    const s = state([
+      { op: "create", title: "old", priority: 2, at: "2026-10-01T10:00:00Z" },
+      { op: "create", title: "new", priority: 2, at: "2026-10-20T10:00:00Z" },
+      { op: "create", title: "mid", priority: 2, at: "2026-10-10T10:00:00Z" },
+      { op: "comment", id: "t-3", text: "poked", at: "2026-10-23T10:00:00Z" },
+    ]);
+    const order = (sort?: string) => block(page(view(s), { path: "", query: sort === undefined ? {} : { sort } }), "ready", "list")!.items!.map((i) => i.text);
+    expect(order()).toEqual(["old", "new", "mid"]);
+    expect(order("new")).toEqual(["new", "mid", "old"]);
+    // Updated: the comment on "mid" moved it to the top.
+    expect(order("updated")).toEqual(["mid", "new", "old"]);
+    expect(order("nonsense")).toEqual(order());
+  });
+
+  it("lists the 8 most recently touched tasks beside the list, newest first, each linking to its page", () => {
+    const s = state([
+      ...Array.from({ length: 10 }, (_, i) => ({ op: "create", title: `task ${i + 1}`, priority: 2, at: `2026-10-${String(10 + i).padStart(2, "0")}T10:00:00Z` })),
+      { op: "comment", id: "t-2", text: "poked", at: "2026-10-23T18:00:00Z" },
+      { op: "claim", id: "t-3", at: "2026-10-22T18:00:00Z" },
+    ]);
+    const items = block(page(view(s), { path: "" }), "recent", "list")!.items!;
+    expect(items).toHaveLength(8);
+    expect(items.map((i) => i.page)).toEqual(["task/t-2", "task/t-3", "task/t-10", "task/t-9", "task/t-8", "task/t-7", "task/t-6", "task/t-5"]);
+    expect(items[0]).toMatchObject({ text: "task 2", meta: "t-2 · Open · Oct 23, 1:00 PM" });
+    expect(items[1]).toMatchObject({ meta: "t-3 · In progress · Oct 22, 1:00 PM", agent: "art" });
   });
 });
 
@@ -183,7 +245,7 @@ describe("task page", () => {
       { label: "Waits on", value: "doing one", detail: "t-1", tone: "warn", page: "task/t-1" },
       { label: "Record", value: "Its ids and refs", sheet: { title: "t-6", blocks: [{ type: "kv", items: [{ label: "Task", value: "t-6" }] }] } },
     ]);
-    expect(section(p, "facts")!.side).toBe(true);
+    expect(section(p, "facts")!.place).toBe("side");
     expect(block(p, "task", "buttons")!.items).toEqual([{ action: "close", label: "Mark done", tone: "primary", fields: { id: "t-6" } }]);
     expect(block(p, "comments", "list")).toEqual({ type: "list", wrap: true, items: [{ text: "first note", meta: "art · 12:30 PM", agent: "art" }] });
     expect(block(p, "reply", "form")).toMatchObject({ action: "comment", title: "Reply", submit: "Send", hidden: { id: "t-6" }, fields: [{ name: "text", label: "Reply", kind: "textarea", required: true }] });
@@ -230,6 +292,11 @@ describe("task page", () => {
     const m = manifest(view(s));
     const items = block(page(view(s), { path: "" }), "next", "list")!.items!;
     expect(items[0]).toEqual({ text: "legacy", meta: "Needs a plain summary · High · BD-1" });
+    // Nowhere on the page, the side column's Recently updated included: every piece link fits the grammar.
+    const p = page(view(s), { path: "" });
+    expect(block(p, "recent", "list")!.items![0]).not.toHaveProperty("page");
+    const links = JSON.stringify(p).match(/"page":"[^"]*"/g) ?? [];
+    expect(links.filter((l) => !/^"page":"(loom:.*|[a-z0-9._~/-]{0,200})"$/.test(l))).toEqual([]);
     expect(m.tile.value).toBe("0 in progress");
   });
 
@@ -547,7 +614,7 @@ describe("a task's changes (loom docs/specs/changes.md, Linked tasks)", () => {
   it("lists the changes that cite the task in a side section, each linking to its page in the Changes piece", () => {
     const p = page({ ...view(base()), changes: [ref] }, { path: "task/t-1" });
     const s = section(p, "changes")!;
-    expect(s.side).toBe(true);
+    expect(s.place).toBe("side");
     expect(s.blocks[0]).toEqual({ type: "list", items: [{ text: "app#12 Fix it", meta: "CI green, Waiting on you", page: "loom:p/changes/c/github/acme/app/12" }] });
     expect(section(page(view(base()), { path: "task/t-1" }), "changes")).toBeUndefined();
   });

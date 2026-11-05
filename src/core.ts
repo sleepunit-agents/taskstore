@@ -73,7 +73,8 @@ export const PLAIN_FIELDS = ["goal", "why", "doneWhen", "ask", "ifYes", "ifNo", 
 /** Held only beside an ask. */
 const ASK_PARTS = ["ifYes", "ifNo", "answers"] as const;
 const UPDATABLE: readonly string[] = ["assignee", "description", "priority", "title", ...PLAIN_FIELDS];
-const SEARCH_FIELDS: readonly string[] = [
+/** The fields `search` matches (and loom's page's "Find a task", src/loom-ui.ts). */
+export const SEARCH_FIELDS: readonly string[] = [
   "id", "title", "description", "specItemRef", "criterionId", "legacyRef", "goal", "why", "ask",
 ];
 
