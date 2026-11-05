@@ -21,7 +21,7 @@
 
 import Database from "better-sqlite3";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -594,5 +594,91 @@ describe("concurrent CLI writers", () => {
     const task = (after.run({ op: "show", id }) as { task: { comments: unknown[] } }).task;
     after.close();
     expect(task.comments).toEqual([]);
+  });
+});
+
+// `comment --file`: long text without shell quoting. A body passing a long
+// comment inline had to put backticks and $( ) inside double quotes, and a
+// headless harness's command checker stopped on exactly that, for hours (t-1854).
+describe("comment --file", () => {
+  const tricky = "Round 12: ran `rclone authorize drive`; then $(cat <<'EOF'\nnot run\nEOF\n) and \"quotes\" and \\` stay as written.";
+
+  function run(args: string[], input?: string): { status: number; stdout: string; stderr: string; db: string; id: string } {
+    const d = mkdtempSync(join(tmpdir(), "taskstore-file-"));
+    const db = join(d, "store.db");
+    const s = new SqliteStore(db);
+    const id = s.run({ op: "create", title: "target", actor: "test", at: "2026-11-04T18:00:00.000Z" }).id as string;
+    s.close();
+    const argv = args.map((a) => a.replaceAll("{id}", id).replaceAll("{dir}", d));
+    try {
+      const stdout = execFileSync("node", [join(repo, "dist", "cli.js"), ...argv], {
+        env: { ...process.env, TASKSTORE_DB: db }, input: input ?? "", stdio: ["pipe", "pipe", "pipe"],
+      }).toString();
+      return { status: 0, stdout, stderr: "", db, id };
+    } catch (e) {
+      const err = e as { status: number; stdout: Buffer; stderr: Buffer };
+      return { status: err.status, stdout: String(err.stdout), stderr: String(err.stderr), db, id };
+    }
+  }
+
+  function comments(db: string, id: string): string[] {
+    const s = new SqliteStore(db);
+    const task = (s.run({ op: "show", id }) as { task: { comments: { text: string }[] } }).task;
+    s.close();
+    return task.comments.map((c) => c.text);
+  }
+
+  it("reads the comment from a file, exactly as written (one trailing newline dropped)", () => {
+    const d = mkdtempSync(join(tmpdir(), "taskstore-text-"));
+    const f = join(d, "comment.md");
+    writeFileSync(f, tricky + "\n");
+    const r = run(["comment", "{id}", "--file", f]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).ok).toBe(true);
+    expect(comments(r.db, r.id)).toEqual([tricky]);
+  });
+
+  it("reads it from stdin with --file -", () => {
+    const r = run(["comment", "{id}", "--file", "-"], tricky + "\n");
+    expect(r.status).toBe(0);
+    expect(comments(r.db, r.id)).toEqual([tricky]);
+  });
+
+  it("refuses text and --file together, and writes nothing", () => {
+    const r = run(["comment", "{id}", "inline", "--file", "-"], "from stdin");
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/not both/);
+    expect(comments(r.db, r.id)).toEqual([]);
+  });
+
+  it("a file that isn't there is a rejection (ok: false on stdout, exit 1), and writes nothing", () => {
+    const r = run(["comment", "{id}", "--file", "{dir}/nope.md"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/can't read --file/);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, errors: ["E_FILE"] });
+    expect(comments(r.db, r.id)).toEqual([]);
+  });
+
+  it("drops exactly one trailing newline and keeps everything else as written", () => {
+    const cases: [string, string][] = [
+      ["note", "note"],                       // no trailing newline: nothing dropped
+      ["note\n\n\n", "note\n\n"],            // only one of several
+      ["  indented\n  and spaced  \n", "  indented\n  and spaced  "],
+      ["crlf\r\nlines\r\n", "crlf\r\nlines"], // a CRLF file's final line ending
+    ];
+    for (const [input, stored] of cases) {
+      const r = run(["comment", "{id}", "--file", "-"], input);
+      expect(r.status).toBe(0);
+      expect(comments(r.db, r.id)).toEqual([stored]);
+    }
+  });
+
+  it("an empty file is a rejection, and writes nothing", () => {
+    for (const input of ["", "\n", "  \n"]) {
+      const r = run(["comment", "{id}", "--file", "-"], input);
+      expect(r.status).toBe(1);
+      expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, errors: ["E_EMPTY"] });
+      expect(comments(r.db, r.id)).toEqual([]);
+    }
   });
 });
