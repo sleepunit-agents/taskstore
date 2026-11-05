@@ -176,6 +176,17 @@ describe("Work page", () => {
   });
 
   it("finds tasks by id, title, goal or ask (?q=), across every group, and says when nothing matches", () => {
+    // By goal and by ask, words that are in no title or id.
+    const s = state([
+      { op: "create", title: "one", priority: 2, goal: "The backup has an offsite copy" },
+      { op: "create", title: "two", priority: 2 },
+      { op: "update", id: "t-2", set: { ask: "OK to install rclone?", assignee: "jonathan", ifYes: "I install it.", ifNo: "I don't." } },
+      { op: "create", title: "three", priority: 2 },
+    ]);
+    const found = (q: string) => page(view(s), { path: "", query: { q } }).sections.filter((x) => !x.place)
+      .flatMap((x) => (x.blocks[0].items as Array<{ page?: string }> | undefined) ?? []).map((i) => i.page);
+    expect(found("offsite")).toEqual(["task/t-1"]);
+    expect(found("RCLONE")).toEqual(["task/t-2"]);
     const p = page(view(base()), { path: "", query: { q: "OWNER" } });
     expect(p.intro).toBe("Finding “OWNER”");
     expect(p.sections.filter((s) => !s.place).map((s) => s.id)).toEqual(["yours", "done"]);
@@ -281,6 +292,11 @@ describe("task page", () => {
     const m = manifest(view(s));
     const items = block(page(view(s), { path: "" }), "next", "list")!.items!;
     expect(items[0]).toEqual({ text: "legacy", meta: "Needs a plain summary · High · BD-1" });
+    // Nowhere on the page, the side column's Recently updated included: every piece link fits the grammar.
+    const p = page(view(s), { path: "" });
+    expect(block(p, "recent", "list")!.items![0]).not.toHaveProperty("page");
+    const links = JSON.stringify(p).match(/"page":"[^"]*"/g) ?? [];
+    expect(links.filter((l) => !/^"page":"(loom:.*|[a-z0-9._~/-]{0,200})"$/.test(l))).toEqual([]);
     expect(m.tile.value).toBe("0 in progress");
   });
 

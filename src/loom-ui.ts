@@ -12,7 +12,7 @@
 // reads) into a UiView and does the one write. Nothing in this file touches
 // the store, so a page load never lands in the interaction log.
 
-import type { Link, Task } from "./core.js";
+import { SEARCH_FIELDS, type Link, type Task } from "./core.js";
 
 export interface ReadyEntry { id: string; priority: number; title: string; type?: string }
 
@@ -54,7 +54,7 @@ export function changeRefs(v: unknown): ChangeRef[] {
 }
 
 type Block = Record<string, unknown> & { type: string };
-/** `place: "side"` puts a section in loom's side column (loom docs/extensions.md, "Pages"): a desktop window's right-hand
+/** `place: "side"` puts a section in loom's side column (loom docs/extensions.md, "The page", its "Pages" part): a desktop window's right-hand
  * column, folded at the top of the page on a phone. */
 interface Section { id: string; title?: string; tone?: string; place?: "side"; fold?: "open" | "closed"; blocks: Block[] }
 export interface Page { title: string; intro?: string; sections: Section[]; /** loom draws it as the "+" beside the title. */ add?: { page: string; label: string } }
@@ -252,7 +252,7 @@ function weekStart(d: Date, timeZone?: string): number {
  * Is the pile growing or shrinking: tasks opened and done each week, the last WEEKS weeks (this one last), as 000h's
  * bar chart (Jonathan, 2026-10-31: the stats "might just be something worth graphing"), and how many are open now.
  * In the side column, slim (Jonathan, 2026-11-05: "we could slim that up to a smaller like right column thing"): loom
- * draws a side chart shorter, and gives each series its own colour, named in the legend.
+ * draws a side chart shorter. The two series name two different colours, and loom draws each name in the legend.
  */
 function weeks(v: UiView): Section {
   const now = weekStart(v.now, v.timeZone);
@@ -289,14 +289,14 @@ function weeks(v: UiView): Section {
 export const SORTS = [{ value: "", label: "Priority" }, { value: "new", label: "Newest" }, { value: "updated", label: "Updated" }];
 /** How many tasks Recently updated lists. */
 export const RECENT_SHOWN = 8;
-const FIND_MAX = 200;
 
 /** When a task last changed, as far as its record says: filed, started, closed, or its latest comment. */
 export function touchedAt(t: Task): string {
   let best = t.createdAt, at = Date.parse(t.createdAt);
   for (const x of [t.startedAt, t.closedAt, ...t.comments.map((c) => c.at)]) {
     const n = x ? Date.parse(x) : NaN;
-    if (Number.isFinite(n) && !(n <= at)) { best = x!; at = n; }
+    // (an unreadable createdAt, NaN, gives way to the first stamp that reads)
+    if (Number.isFinite(n) && (Number.isNaN(at) || n > at)) { best = x!; at = n; }
   }
   return best;
 }
@@ -308,8 +308,9 @@ const touched = (t: Task) => Date.parse(touchedAt(t)) || 0;
  * how much it matters (up next: urgent and high; ready: normal; later: low and someday), and the last week's
  * done folded at the foot. Each task once, in the first group it fits; an empty group isn't drawn.
  *
- * Beside it, in loom's side column (Jonathan, 2026-11-05): find and sort (`?q=` matches a task's id, title, goal or
- * ask; `?sort=` orders each group), the opened-and-done chart, and the tasks touched most recently.
+ * Beside it, in loom's side column (Jonathan, 2026-11-05): find and sort (`?q=` matches what `taskstore search` does:
+ * id, title, description, refs, goal, why and ask; `?sort=` orders each group), the opened-and-done chart, and the
+ * tasks touched most recently.
  */
 export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const seen = new Set<string>();
@@ -317,13 +318,16 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const tasks = new Map(v.tasks.map((t) => [t.id, t]));
   const ready = v.ready.map((e) => tasks.get(e.id)).filter((t): t is Task => !!t);
   const blockers = (t: Task) => v.links.filter((l) => l.type === "blocks" && l.id === t.id && tasks.get(l.dependsOn)?.status !== "closed").map((l) => l.dependsOn);
-  const find = typeof query.q === "string" ? query.q.trim().slice(0, FIND_MAX) : "";
+  const find = typeof query.q === "string" ? query.q.trim() : "";
   const needle = find.toLowerCase();
   const sort = typeof query.sort === "string" && SORTS.some((o) => o.value === query.sort) ? query.sort : "";
-  const matches = (t: Task) => !needle || [t.id, t.title, t.goal, t.ask].some((x) => x?.toLowerCase().includes(needle));
+  const matches = (t: Task) => !needle || SEARCH_FIELDS.some((f) => {
+    const x = (t as unknown as Record<string, unknown>)[f];
+    return typeof x === "string" && x.toLowerCase().includes(needle);
+  });
   const created = (t: Task) => Date.parse(t.createdAt) || 0;
   /** A group's tasks that match, in the order asked for (the group's own, by default). */
-  const shown = (ts: Task[]) => {
+  const matchingInOrder = (ts: Task[]) => {
     const m = ts.filter(matches);
     return sort === "new" ? m.sort((a, b) => created(b) - created(a)) : sort === "updated" ? m.sort((a, b) => touched(b) - touched(a)) : m;
   };
@@ -358,24 +362,24 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     });
   };
 
-  group("yours", "Waiting on you", shown(ownersCall(v)).filter(take).map((t) => askRow(t, [who(t), pri(t), t.id])), "warn");
-  group("doing", "In progress", shown(inProgress(v)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
+  group("yours", "Waiting on you", matchingInOrder(ownersCall(v)).filter(take).map((t) => askRow(t, [who(t), pri(t), t.id])), "warn");
+  group("doing", "In progress", matchingInOrder(inProgress(v)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
   const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
-  group("blocked", "Blocked", shown(blocked).filter(take).map((t) => {
+  group("blocked", "Blocked", matchingInOrder(blocked).filter(take).map((t) => {
     const on = blockers(t);
     return row(t, [who(t), `Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id]);
   }));
-  group("next", "Up next", shown(ready.filter((t) => t.priority <= 1)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
-  group("ready", "Ready", shown(ready.filter((t) => t.priority === 2)).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
-  group("later", "Later", shown(ready.filter((t) => t.priority >= 3)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
-  group("done", `Done in the last ${DONE_DAYS} days`, shown(done)
+  group("next", "Up next", matchingInOrder(ready.filter((t) => t.priority <= 1)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
+  group("ready", "Ready", matchingInOrder(ready.filter((t) => t.priority === 2)).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
+  group("later", "Later", matchingInOrder(ready.filter((t) => t.priority >= 3)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
+  group("done", `Done in the last ${DONE_DAYS} days`, matchingInOrder(done)
     .map((t) => row(t, [who(t), pri(t), t.id, humanDate(t.closedAt, v.now, v.timeZone)])), undefined, "closed");
   if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: find ? `Nothing matches “${clip(find, 80)}”.` : "Nothing open.", tone: "muted" }] });
 
   // The side column: find and sort first (it changes the list), the chart, then what moved last.
   const recent = v.tasks.filter((t) => t.type !== "epic").sort((a, b) => touched(b) - touched(a)).slice(0, RECENT_SHOWN);
   const side: Section[] = [
-    { id: "show", title: "Find and sort", place: "side", blocks: [{ type: "filters", param: "sort", search: "Find a task", options: SORTS }] },
+    { id: "show", title: "Find and sort", place: "side", blocks: [{ type: "filters", param: "sort", search: "Find a task", options: SORTS.map((o) => ({ ...o })) }] },
     weeks(v),
     ...(recent.length ? [{ id: "recent", title: "Recently updated", place: "side" as const, blocks: [{ type: "list", items: recent.map((t) => ({
       text: clip(t.title, TITLE_MAX), meta: clip(`${t.id} · ${t.status === "open" && blockers(t).length ? "Blocked" : statusWords(t.status)} · ${humanDate(touchedAt(t), v.now, v.timeZone)}`),
