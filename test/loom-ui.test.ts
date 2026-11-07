@@ -208,8 +208,10 @@ describe("Work page", () => {
     expect(all).toEqual(["yours", "doing", "blocked", "next", "done"]);
     expect(main("doing")).toEqual(["doing"]);
     expect(main("yours,done")).toEqual(["yours", "done"]);
-    // Open is the ready queue: up next, ready and later.
     expect(main("open")).toEqual(["next"]);
+    // Open is the whole ready queue: up next, ready and later.
+    const q = state([0, 2, 3].map((priority) => ({ op: "create", title: `p${priority}`, priority })));
+    expect(page(view(q, ""), { path: "", query: { show: "open" } }).sections.filter((s) => !s.place).map((s) => s.id)).toEqual(["next", "ready", "later"]);
     expect(main("zebra")).toEqual(all);
     expect(main("")).toEqual(all);
     // A task taken by a hidden group doesn't move into another: the owner's in-progress task stays out of In progress.
@@ -233,6 +235,19 @@ describe("Work page", () => {
     expect(items[1].more).toEqual({ items: [{ label: "Goal", value: "Only a goal" }], open: "Open task" });
     expect(items[2]).not.toHaveProperty("more");
     expect(items[2].page).toBe("task/t-3");
+    // A waiting-on-you row (its ask as its title) opens the same way.
+    const asked = state([{ op: "create", title: "ask me", priority: 1, goal: "G", why: "W" },
+      { op: "update", id: "t-1", set: { assignee: "jonathan", ask: "OK?", ifYes: "y", ifNo: "n" } }]);
+    expect(block(page(view(asked), { path: "" }), "yours", "list")!.items![0]).toMatchObject({ text: "OK?",
+      more: { items: [{ label: "Goal", value: "G" }, { label: "Why", value: "W" }], open: "Open task" } });
+    // A long one is cut to loom's 2000 characters, never sent whole (loom would refuse the page).
+    const long = state([{ op: "create", title: "long", priority: 1, goal: "g".repeat(5000) }]);
+    const value = (block(page(view(long), { path: "" }), "next", "list")!.items![0] as { more: { items: Array<{ value: string }> } }).more.items[0].value;
+    expect(value).toHaveLength(2000);
+    // A task whose id no page path can carry opens in place without an Open task (there's nowhere to open).
+    const legacy = state([{ op: "import", tasks: [{ id: "BD-1", title: "legacy", type: "task", status: "open", priority: 1, createdAt: AT, createdBy: "art", comments: [], goal: "Old goal" }], links: [] }]);
+    expect(block(page(view(legacy), { path: "" }), "next", "list")!.items![0]).toEqual({ text: "legacy", meta: "Old goal · High · BD-1",
+      more: { items: [{ label: "Goal", value: "Old goal" }] } });
   });
 
   it("sorts each group (?sort=): by priority as the groups have it, newest first, or most recently touched first", () => {

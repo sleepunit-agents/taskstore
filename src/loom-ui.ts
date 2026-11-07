@@ -290,15 +290,15 @@ export const SORTS = [{ value: "", label: "Priority" }, { value: "new", label: "
 /** The status chips under the sort (?show=a,b; none on means every group): which groups the list draws. "Open" is the
  * ready queue (up next, ready, later). */
 export const SHOWS = [{ value: "yours", label: "Needs you" }, { value: "doing", label: "In progress" }, { value: "blocked", label: "Blocked" },
-  { value: "open", label: "Open" }, { value: "done", label: "Done" }];
-const SHOW_OF: Record<string, string> = { yours: "yours", doing: "doing", blocked: "blocked", next: "open", ready: "open", later: "open", done: "done" };
+  { value: "open", label: "Open" }, { value: "done", label: "Done" }] as const;
+type Show = (typeof SHOWS)[number]["value"];
 
 /** What a row opens to in place (loom's list `more`, Jonathan's Tasks mock, t-1925): its goal, why and done-when, and
  * Open task. Nothing to show (no summary yet): none, and the row goes straight to the task. */
-function more(t: Task, page?: string): { more?: { items: Array<{ label: string; value: string }>; open?: string } } {
+function moreOf(t: Task, link?: string): { more?: { items: Array<{ label: string; value: string }>; open?: string } } {
   const pairs: Array<[string, string | undefined]> = [["Goal", t.goal], ["Why", t.why], ["Done when", t.doneWhen]];
   const items = pairs.flatMap(([label, value]) => (value?.trim() ? [{ label, value: clip(value.trim()) }] : []));
-  return items.length ? { more: { items, ...(page ? { open: "Open task" } : {}) } } : {};
+  return items.length ? { more: { items, ...(link ? { open: "Open task" } : {}) } } : {};
 }
 /** How many tasks Recently updated lists. */
 export const RECENT_SHOWN = 8;
@@ -353,13 +353,12 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   // The plain title, and its goal as the second line (Jonathan, 2026-11-04: "if I can't understand it from the task
   // list, I can't know if we're doing the right thing"); the facts follow the goal.
   // A row opens in place to its goal, why and done-when, with Open task inside (Jonathan's Tasks mock, t-1925).
+  const linked = (t: Task) => { const l = taskLink(t.id); return { ...l, ...moreOf(t, l.page) }; };
   const row = (t: Task, meta: Array<string | false | undefined>) => ({
-    text: clip(t.title, TITLE_MAX), meta: clip([goalLine(t), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
-    ...more(t, taskLink(t.id).page),
+    text: clip(t.title, TITLE_MAX), meta: clip([goalLine(t), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...linked(t),
   });
   const askRow = (t: Task, meta: Array<string | false | undefined>) => (t.ask?.trim()
-    ? { text: clip(t.ask, TITLE_MAX), meta: clip([t.why?.trim() || t.goal?.trim(), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
-      ...more(t, taskLink(t.id).page) }
+    ? { text: clip(t.ask, TITLE_MAX), meta: clip([t.why?.trim() || t.goal?.trim(), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...linked(t) }
     : row(t, meta));
   const who = (t: Task) => nameOf(v, t.assignee);
   const pri = (t: Task) => priorityWord(t.priority);
@@ -368,9 +367,9 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   // starts open, the long tail of the queue starts folded; loom keeps each viewer's own open and close after that.
   // The status chips (?show=): a group whose chip is off isn't drawn (its tasks are still taken, so none moves into
   // another group).
-  const shows = new Set((typeof query.show === "string" ? query.show : "").split(",").filter((x) => SHOWS.some((o) => o.value === x)));
-  const group = (id: string, title: string, rows: Array<Record<string, unknown>>, tone?: string, fold: "open" | "closed" = "open") => {
-    if (!rows.length || (shows.size && !shows.has(SHOW_OF[id]))) return;
+  const shows = new Set<string>((typeof query.show === "string" ? query.show : "").split(",").filter((x) => SHOWS.some((o) => o.value === x)));
+  const group = (id: string, show: Show, title: string, rows: Array<Record<string, unknown>>, tone?: string, fold: "open" | "closed" = "open") => {
+    if (!rows.length || (shows.size && !shows.has(show))) return;
     const count = Math.ceil(rows.length / GROUP_SHOWN);
     const want = Number(typeof query[id] === "string" ? query[id] : 1);
     const at = Number.isInteger(want) && want >= 1 && want <= count ? want : 1;
@@ -382,19 +381,20 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
     });
   };
 
-  group("yours", "Waiting on you", matchingInOrder(ownersCall(v)).filter(take).map((t) => askRow(t, [who(t), pri(t), t.id])), "warn");
-  group("doing", "In progress", matchingInOrder(inProgress(v)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
+  group("yours", "yours", "Waiting on you", matchingInOrder(ownersCall(v)).filter(take).map((t) => askRow(t, [who(t), pri(t), t.id])), "warn");
+  group("doing", "doing", "In progress", matchingInOrder(inProgress(v)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
   const blocked = v.tasks.filter((t) => t.status === "open" && t.type !== "epic" && blockers(t).length).sort((a, b) => a.priority - b.priority);
-  group("blocked", "Blocked", matchingInOrder(blocked).filter(take).map((t) => {
+  group("blocked", "blocked", "Blocked", matchingInOrder(blocked).filter(take).map((t) => {
     const on = blockers(t);
     return row(t, [who(t), `Waiting on ${on.slice(0, 3).join(", ")}${on.length > 3 ? "…" : ""}`, pri(t), t.id]);
   }));
-  group("next", "Up next", matchingInOrder(ready.filter((t) => t.priority <= 1)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
-  group("ready", "Ready", matchingInOrder(ready.filter((t) => t.priority === 2)).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
-  group("later", "Later", matchingInOrder(ready.filter((t) => t.priority >= 3)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
-  group("done", `Done in the last ${DONE_DAYS} days`, matchingInOrder(done)
+  group("next", "open", "Up next", matchingInOrder(ready.filter((t) => t.priority <= 1)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])));
+  group("ready", "open", "Ready", matchingInOrder(ready.filter((t) => t.priority === 2)).filter(take).map((t) => row(t, [who(t), t.id])), undefined, "closed");
+  group("later", "open", "Later", matchingInOrder(ready.filter((t) => t.priority >= 3)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
+  group("done", "done", `Done in the last ${DONE_DAYS} days`, matchingInOrder(done)
     .map((t) => row(t, [who(t), pri(t), t.id, humanDate(t.closedAt, v.now, v.timeZone)])), undefined, "closed");
-  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: find ? `Nothing matches “${clip(find, 80)}”.` : shows.size ? "Nothing here. Turn another chip on." : "Nothing open.", tone: "muted" }] });
+  const nothing = find ? `Nothing matches “${clip(find, 80)}”.` : shows.size ? "Nothing here. Turn another chip on." : "Nothing open.";
+  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: nothing, tone: "muted" }] });
 
   // The side column: find and sort first (it changes the list), the chart, then what moved last.
   const recent = v.tasks.filter((t) => t.type !== "epic").sort((a, b) => touched(b) - touched(a)).slice(0, RECENT_SHOWN);
