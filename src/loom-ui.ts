@@ -287,6 +287,19 @@ function weeks(v: UiView): Section {
 /** How the work list sorts (its `?sort=`): by how much it matters (the groups' own order), newest first, or the most
  * recently touched first. */
 export const SORTS = [{ value: "", label: "Priority" }, { value: "new", label: "Newest" }, { value: "updated", label: "Updated" }];
+/** The status chips under the sort (?show=a,b; none on means every group): which groups the list draws. "Open" is the
+ * ready queue (up next, ready, later). */
+export const SHOWS = [{ value: "yours", label: "Needs you" }, { value: "doing", label: "In progress" }, { value: "blocked", label: "Blocked" },
+  { value: "open", label: "Open" }, { value: "done", label: "Done" }];
+const SHOW_OF: Record<string, string> = { yours: "yours", doing: "doing", blocked: "blocked", next: "open", ready: "open", later: "open", done: "done" };
+
+/** What a row opens to in place (loom's list `more`, Jonathan's Tasks mock, t-1925): its goal, why and done-when, and
+ * Open task. Nothing to show (no summary yet): none, and the row goes straight to the task. */
+function more(t: Task, page?: string): { more?: { items: Array<{ label: string; value: string }>; open?: string } } {
+  const pairs: Array<[string, string | undefined]> = [["Goal", t.goal], ["Why", t.why], ["Done when", t.doneWhen]];
+  const items = pairs.flatMap(([label, value]) => (value?.trim() ? [{ label, value: clip(value.trim()) }] : []));
+  return items.length ? { more: { items, ...(page ? { open: "Open task" } : {}) } } : {};
+}
 /** How many tasks Recently updated lists. */
 export const RECENT_SHOWN = 8;
 
@@ -309,8 +322,9 @@ const touched = (t: Task) => Date.parse(touchedAt(t)) || 0;
  * done folded at the foot. Each task once, in the first group it fits; an empty group isn't drawn.
  *
  * Beside it, in loom's side column (Jonathan, 2026-11-05): find and sort (`?q=` matches what `taskstore search` does:
- * id, title, description, refs, goal, why and ask; `?sort=` orders each group), the opened-and-done chart, and the
- * tasks touched most recently.
+ * id, title, description, refs, goal, why and ask; `?sort=` orders each group, one switch; `?show=` chips pick the
+ * groups), the opened-and-done chart, and the tasks touched most recently. A row opens in place to its goal, why and
+ * done-when (Jonathan's Tasks mock, t-1925).
  */
 export function workPage(v: UiView, query: Record<string, unknown>): Page {
   const seen = new Set<string>();
@@ -338,19 +352,25 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   // No tone dot on a row: its group already says whether it's blocked, later or done (Jonathan, 2026-10-31).
   // The plain title, and its goal as the second line (Jonathan, 2026-11-04: "if I can't understand it from the task
   // list, I can't know if we're doing the right thing"); the facts follow the goal.
+  // A row opens in place to its goal, why and done-when, with Open task inside (Jonathan's Tasks mock, t-1925).
   const row = (t: Task, meta: Array<string | false | undefined>) => ({
     text: clip(t.title, TITLE_MAX), meta: clip([goalLine(t), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
+    ...more(t, taskLink(t.id).page),
   });
   const askRow = (t: Task, meta: Array<string | false | undefined>) => (t.ask?.trim()
-    ? { text: clip(t.ask, TITLE_MAX), meta: clip([t.why?.trim() || t.goal?.trim(), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id) }
+    ? { text: clip(t.ask, TITLE_MAX), meta: clip([t.why?.trim() || t.goal?.trim(), ...meta].filter(Boolean).join(" · ")), ...whoOf(v, t.assignee), ...taskLink(t.id),
+      ...more(t, taskLink(t.id).page) }
     : row(t, meta));
   const who = (t: Task) => nameOf(v, t.assignee);
   const pri = (t: Task) => priorityWord(t.priority);
   const sections: Section[] = [];
   // Each group folds under its title (Jonathan, 2026-10-31: "can we make the groups collapsible?"): what needs a look
   // starts open, the long tail of the queue starts folded; loom keeps each viewer's own open and close after that.
+  // The status chips (?show=): a group whose chip is off isn't drawn (its tasks are still taken, so none moves into
+  // another group).
+  const shows = new Set((typeof query.show === "string" ? query.show : "").split(",").filter((x) => SHOWS.some((o) => o.value === x)));
   const group = (id: string, title: string, rows: Array<Record<string, unknown>>, tone?: string, fold: "open" | "closed" = "open") => {
-    if (!rows.length) return;
+    if (!rows.length || (shows.size && !shows.has(SHOW_OF[id]))) return;
     const count = Math.ceil(rows.length / GROUP_SHOWN);
     const want = Number(typeof query[id] === "string" ? query[id] : 1);
     const at = Number.isInteger(want) && want >= 1 && want <= count ? want : 1;
@@ -374,12 +394,13 @@ export function workPage(v: UiView, query: Record<string, unknown>): Page {
   group("later", "Later", matchingInOrder(ready.filter((t) => t.priority >= 3)).filter(take).map((t) => row(t, [who(t), pri(t), t.id])), undefined, "closed");
   group("done", `Done in the last ${DONE_DAYS} days`, matchingInOrder(done)
     .map((t) => row(t, [who(t), pri(t), t.id, humanDate(t.closedAt, v.now, v.timeZone)])), undefined, "closed");
-  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: find ? `Nothing matches “${clip(find, 80)}”.` : "Nothing open.", tone: "muted" }] });
+  if (!sections.length) sections.push({ id: "empty", blocks: [{ type: "text", text: find ? `Nothing matches “${clip(find, 80)}”.` : shows.size ? "Nothing here. Turn another chip on." : "Nothing open.", tone: "muted" }] });
 
   // The side column: find and sort first (it changes the list), the chart, then what moved last.
   const recent = v.tasks.filter((t) => t.type !== "epic").sort((a, b) => touched(b) - touched(a)).slice(0, RECENT_SHOWN);
   const side: Section[] = [
-    { id: "show", title: "Find and sort", place: "side", blocks: [{ type: "filters", param: "sort", search: "Find a task", options: SORTS.map((o) => ({ ...o })) }] },
+    { id: "show", title: "Find and sort", place: "side", blocks: [{ type: "filters", param: "sort", search: "Find a task", switch: true, options: SORTS.map((o) => ({ ...o })),
+      chips: [{ param: "show", label: "Status", options: SHOWS.map((o) => ({ ...o })) }] }] },
     weeks(v),
     ...(recent.length ? [{ id: "recent", title: "Recently updated", place: "side" as const, blocks: [{ type: "list", items: recent.map((t) => ({
       text: clip(t.title, TITLE_MAX), meta: clip(`${t.id} · ${t.status === "open" && blockers(t).length ? "Blocked" : statusWords(t.status)} · ${humanDate(touchedAt(t), v.now, v.timeZone)}`),
