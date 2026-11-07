@@ -195,8 +195,59 @@ describe("Work page", () => {
     const none = page(view(base()), { path: "", query: { q: "zebra" } });
     expect(none.sections.filter((s) => !s.place)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing matches “zebra”.", tone: "muted" }] }]);
     // The side column stays: the way to change the search is there.
-    expect(section(none, "show")!.blocks[0]).toEqual({ type: "filters", param: "sort", search: "Find a task",
-      options: [{ value: "", label: "Priority" }, { value: "new", label: "Newest" }, { value: "updated", label: "Updated" }] });
+    // One search field, one sort switch, and a row of status chips (Jonathan's Tasks mock, t-1925).
+    expect(section(none, "show")!.blocks[0]).toEqual({ type: "filters", param: "sort", search: "Find a task", switch: true,
+      options: [{ value: "", label: "Priority" }, { value: "new", label: "Newest" }, { value: "updated", label: "Updated" }],
+      chips: [{ param: "show", label: "Status", options: [{ value: "yours", label: "Needs you" }, { value: "doing", label: "In progress" },
+        { value: "blocked", label: "Blocked" }, { value: "open", label: "Open" }, { value: "done", label: "Done" }] }] });
+  });
+
+  it("draws only the groups whose status chips are on (?show=a,b); none on, or only unknown ones, is every group", () => {
+    const main = (show?: string) => page(view(base()), { path: "", query: show === undefined ? {} : { show } }).sections.filter((s) => !s.place).map((s) => s.id);
+    const all = main();
+    expect(all).toEqual(["yours", "doing", "blocked", "next", "done"]);
+    expect(main("doing")).toEqual(["doing"]);
+    expect(main("yours,done")).toEqual(["yours", "done"]);
+    expect(main("open")).toEqual(["next"]);
+    // Open is the whole ready queue: up next, ready and later.
+    const q = state([0, 2, 3].map((priority) => ({ op: "create", title: `p${priority}`, priority })));
+    expect(page(view(q, ""), { path: "", query: { show: "open" } }).sections.filter((s) => !s.place).map((s) => s.id)).toEqual(["next", "ready", "later"]);
+    expect(main("zebra")).toEqual(all);
+    expect(main("")).toEqual(all);
+    // A task taken by a hidden group doesn't move into another: the owner's in-progress task stays out of In progress.
+    const doing = block(page(view(base()), { path: "", query: { show: "doing" } }), "doing", "list")!.items!.map((i) => i.page);
+    expect(doing).toEqual(["task/t-1"]);
+    // Nothing in the chips that are on: said so, and the side column stays.
+    const none = page(view(state([{ op: "create", title: "x", priority: 2 }])), { path: "", query: { show: "done" } });
+    expect(none.sections.filter((s) => !s.place)).toEqual([{ id: "empty", blocks: [{ type: "text", text: "Nothing here. Turn another chip on.", tone: "muted" }] }]);
+    expect(section(none, "show")).toBeDefined();
+  });
+
+  it("a row opens in place to its goal, why and done-when, with Open task inside; one with none of them just links", () => {
+    const s = state([
+      { op: "create", title: "full", priority: 1, goal: "It works", why: "It broke", doneWhen: "Tested twice" },
+      { op: "create", title: "half", priority: 1, goal: "Only a goal" },
+      { op: "create", title: "bare", priority: 1 },
+    ]);
+    const items = block(page(view(s), { path: "" }), "next", "list")!.items! as Array<Record<string, unknown>>;
+    expect(items[0]).toMatchObject({ text: "full", page: "task/t-1",
+      more: { items: [{ label: "Goal", value: "It works" }, { label: "Why", value: "It broke" }, { label: "Done when", value: "Tested twice" }], open: "Open task" } });
+    expect(items[1].more).toEqual({ items: [{ label: "Goal", value: "Only a goal" }], open: "Open task" });
+    expect(items[2]).not.toHaveProperty("more");
+    expect(items[2].page).toBe("task/t-3");
+    // A waiting-on-you row (its ask as its title) opens the same way.
+    const asked = state([{ op: "create", title: "ask me", priority: 1, goal: "G", why: "W" },
+      { op: "update", id: "t-1", set: { assignee: "jonathan", ask: "OK?", ifYes: "y", ifNo: "n" } }]);
+    expect(block(page(view(asked), { path: "" }), "yours", "list")!.items![0]).toMatchObject({ text: "OK?",
+      more: { items: [{ label: "Goal", value: "G" }, { label: "Why", value: "W" }], open: "Open task" } });
+    // A long one is cut to loom's 2000 characters, never sent whole (loom would refuse the page).
+    const long = state([{ op: "create", title: "long", priority: 1, goal: "g".repeat(5000) }]);
+    const value = (block(page(view(long), { path: "" }), "next", "list")!.items![0] as { more: { items: Array<{ value: string }> } }).more.items[0].value;
+    expect(value).toHaveLength(2000);
+    // A task whose id no page path can carry opens in place without an Open task (there's nowhere to open).
+    const legacy = state([{ op: "import", tasks: [{ id: "BD-1", title: "legacy", type: "task", status: "open", priority: 1, createdAt: AT, createdBy: "art", comments: [], goal: "Old goal" }], links: [] }]);
+    expect(block(page(view(legacy), { path: "" }), "next", "list")!.items![0]).toEqual({ text: "legacy", meta: "Old goal · High · BD-1",
+      more: { items: [{ label: "Goal", value: "Old goal" }] } });
   });
 
   it("sorts each group (?sort=): by priority as the groups have it, newest first, or most recently touched first", () => {
