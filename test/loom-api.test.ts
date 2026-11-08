@@ -71,6 +71,22 @@ describe("taskstore api", () => {
     expect(run(["ready"], art, { TASKSTORE_AGENTS: "" }).status).toBe(403);
   });
 
+  it("lets in an agent loom's grants authority allowed, without its own list (t-1971)", () => {
+    // mark isn't in TASKSTORE_AGENTS ("art"), but the runtime granted him tasks.
+    const mark = { kind: "agent", agent: "mark", house: "h-7", granted: true };
+    const made = run(["create", "granted, not listed"], mark);
+    expect(made.status).toBe(200);
+    expect(made.body.exit).toBe(0);
+    expect(out(run(["show", out(made.body).id as string]).body).task.createdBy).toBe("mark");
+    // Even with an empty list: the grant decides when a runtime is installed.
+    expect(run(["ready"], mark, { TASKSTORE_AGENTS: "" }).status).toBe(200);
+    // Only a literal true counts; anything else falls back to the list.
+    expect(run(["ready"], { ...mark, granted: "true" }).status).toBe(403);
+    expect(run(["ready"], { ...mark, granted: false }).status).toBe(403);
+    // It never lets in a caller that isn't an agent.
+    expect(run(["ready"], { kind: "piece", subject: "box/thor", granted: true }).status).toBe(403);
+  });
+
   it("won't read files on loom's machine or reach the loom-facing verbs", () => {
     for (const v of ["import", "api", "ui"]) expect(run([v, "/etc/passwd"]).status).toBe(403);
     expect(run([]).status).toBe(400);
