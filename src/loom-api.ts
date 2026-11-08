@@ -10,8 +10,12 @@
 // it means locally: the same verbs, flags, JSON and exit codes (0/1/2/3).
 // What it adds is who:
 //   - the owner, as TASKSTORE_OWNER (or "owner");
-//   - an agent named in TASKSTORE_AGENTS (comma-separated), as that agent:
-//     the actor comes from loom's resolved caller, never from the request;
+//   - an agent loom's grants authority allowed (the caller carries
+//     `granted: true`, loom agent-runtime.md "Agent grants"), as that agent:
+//     with a runtime installed the grant decides, not this store's list;
+//   - otherwise an agent named in TASKSTORE_AGENTS (comma-separated), the
+//     fallback for a household without a runtime. Either way the actor comes
+//     from loom's resolved caller, never from the request;
 //   - nobody else. A piece's credential (a box) gets nothing here.
 // And what it leaves out: `import` (it reads a file path on loom's machine)
 // and the loom-facing verbs (api, ui).
@@ -22,7 +26,7 @@
 import { gzipSync } from "node:zlib";
 
 export interface ApiRequest {
-  caller?: { kind?: string; agent?: string; subject?: string };
+  caller?: { kind?: string; agent?: string; subject?: string; granted?: unknown };
   path?: string;
   body?: { argv?: unknown };
 }
@@ -53,6 +57,8 @@ function refuse(status: number, error: string): ApiAnswer {
 export function actorFor(caller: ApiRequest["caller"], env: NodeJS.ProcessEnv): string | ApiAnswer {
   if (caller?.kind === "owner") return env.TASKSTORE_OWNER?.trim() || "owner";
   if (caller?.kind === "agent" && typeof caller.agent === "string") {
+    // loom's grants authority already decided this call (loom sets granted only after its yes).
+    if (caller.granted === true) return caller.agent;
     const allowed = (env.TASKSTORE_AGENTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     if (allowed.includes(caller.agent)) return caller.agent;
     return refuse(403, `${caller.agent} doesn't use this store`);
