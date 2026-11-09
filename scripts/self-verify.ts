@@ -7,10 +7,12 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { fixtureHash, ingest, parse, verify } from "felag";
 import { runOps } from "../src/run-ops.js";
 import { TaskstoreWorkLayer } from "../src/work-layer.js";
 import type { Command } from "../src/core.js";
+import { loadFelag } from "./felag.mjs";
+
+const { fixtureHash, ingest, parse, verify } = await loadFelag();
 
 const IMPLEMENTATION = "taskstore-impl";
 const IMPLEMENTATION_VERSION = "0.2.0";
