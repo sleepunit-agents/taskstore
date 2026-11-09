@@ -55,6 +55,13 @@ const base = () => state([
 ]);
 
 describe("manifest", () => {
+  it("reports all open assigned or agent-created work as backlog without claiming it is running", () => {
+    const v = { ...view(base()), agents: ["art", "mark"] };
+    expect(manifest(v).agents.art.jobs.map((j) => [j.id, j.status])).toEqual([["t-1", "backlog"], ["t-2", "backlog"], ["t-6", "backlog"]]);
+    expect(manifest(v).agents.mark.jobs).toEqual([]);
+    expect(manifest(v)).not.toHaveProperty("owners");
+  });
+
   it("has the tab, the Work tile and the owner's open asks, highest priority first", () => {
     const m = manifest(view(base()));
     expect(m.v).toBe(2);

@@ -166,6 +166,11 @@ export function manifest(v: UiView) {
   return {
     v: 2,
     tab: { label: "Tasks" },
+    // Existing task-store visibility is household-only; this does not opt its pages into agent-owner access.
+    agents: Object.fromEntries((v.agents ?? []).map((agent) => [agent, { readings: [], jobs: v.tasks
+      .filter((t) => t.status !== "closed" && t.type !== "epic" && (t.assignee === agent || (!t.assignee && t.createdBy === agent)))
+      .map((t) => ({ id: t.id, tasks: [t.id], status: "backlog", text: clip(t.title, TITLE_MAX), ...taskLink(t.id),
+        ...(t.source?.match(/^conversation:cv-[0-9a-f]{12}$/) ? { conversation: t.source.slice(13) } : {}) })) }])),
     tile: {
       label: "Work",
       value: `${doing} in progress`,
