@@ -55,6 +55,11 @@ const base = () => state([
 ]);
 
 describe("manifest", () => {
+  it("keeps the agent’s task waiting on its owner on the agent card", () => {
+    const s = state([{ op: "create", title: "Choose the backup", goal: "Backups have an agreed destination.", why: "The destination needs a decision." },
+      { op: "update", id: "t-1", set: { assignee: "jonathan", ask: "Use the external drive for backups?", ifYes: "I use the drive.", ifNo: "I keep the existing backup." } }]);
+    expect(manifest({ ...view(s), agents: ["art"] }).agents.art.jobs[0]).toMatchObject({ id: "t-1", status: "waiting" });
+  });
   it("reports all open assigned or agent-created work as backlog without claiming it is running", () => {
     const v = { ...view(base()), agents: ["art", "mark"] };
     expect(manifest(v).agents.art.jobs.map((j) => [j.id, j.status])).toEqual([["t-1", "backlog"], ["t-2", "backlog"], ["t-6", "backlog"]]);
