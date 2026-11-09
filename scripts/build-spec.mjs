@@ -6,7 +6,9 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { serialize, sortFixtures, validateAuthorOutput } from "felag";
+import { loadFelag } from "./felag.mjs";
+
+const { serialize, sortFixtures, validateAuthorOutput } = await loadFelag();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "spec", "taskstore-core");
