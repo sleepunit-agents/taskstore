@@ -250,7 +250,8 @@
         "collections",
         "changes",
         "--json"
-      ]
+      ],
+      "query_serve": true
     }
   }
 }

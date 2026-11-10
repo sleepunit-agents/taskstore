@@ -53,6 +53,13 @@ import { parseThreadArgs, threadFeed } from "./thread-feed.js";
 import { answer as collectionsAnswer, type Batch } from "./collections.js";
 import { spawn, spawnSync } from "node:child_process";
 
+// The supported collection transport: one framed batch per line, not one CLI process per batch.
+if (process.argv[2] === 'collections' && process.argv[3] === 'query' && process.argv.includes('--serve')) {
+  const { serveCollections } = await import('./collections-server.js');
+  await serveCollections(resolve(process.env.TASKSTORE_DB ?? join('.taskstore', 'store.db')), process.env.TASKSTORE_OWNER?.trim() || '');
+  process.exit(0);
+}
+
 const argv = process.argv.slice(2);
 const verb = argv.shift();
 

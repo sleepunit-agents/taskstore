@@ -102,3 +102,12 @@ transaction and lost 442 of 773 acknowledged writes in that test.
 `npx tsx scripts/concurrent-bench.ts 8 100 store|cli` counts them by hand.
 
 Born in felag ceremony 2 (art-ubo.6, 2026-06-12).
+
+Collection queries can run as `loom-tasks collections query --json --serve`.
+Loom opts in through `loom.collections.query_serve: true`: it sends one JSON
+line `{id, grant, request}` per batch and receives `{id, exit, stdout}` (the
+same JSON lines as the one-shot command, encoded in `stdout`). Each request
+reads the store afresh; no answer or viewer state is cached. The store grant
+is per call and is never placed in the server's environment. Core retains its
+grant, scope, query and row checks and falls back to the one-shot command when
+its bounded server pool is busy or cooling down after a failure.
