@@ -4,6 +4,8 @@
 // brownfield predecessor's mirror went stale by being an afterthought).
 // The binding owns persistence only; every behavior is the pure core's.
 
+import { randomBytes } from "node:crypto";
+import { keptRecords, loggedRecord, type TaskRecord } from "./collections.js";
 import Database from "better-sqlite3";
 import { writeFileSync, renameSync, appendFileSync } from "node:fs";
 import { apply, emptyState, type Command, type Result, type StoreState, type Task, type Link } from "./core.js";
@@ -150,11 +152,73 @@ export class SqliteStore {
         ord INTEGER PRIMARY KEY,
         record TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS collection_changes (
+        rev INTEGER PRIMARY KEY AUTOINCREMENT,
+        txn TEXT NOT NULL,
+        id TEXT NOT NULL,
+        record TEXT
+      );
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
     `);
+    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('collection_origin', ?)").run(randomBytes(16).toString("hex"));
+  }
+
+  /** Kept-field differences include dependents whose blocker/parent changed in this same write. */
+  private logCollections(prev: StoreState, state: StoreState): void {
+    const was = keptRecords(prev.tasks, prev.links);
+    const next = keptRecords(state.tasks, state.links);
+    const txn = randomBytes(16).toString("hex");
+    const insert = this.db.prepare("INSERT INTO collection_changes (txn, id, record) VALUES (?, ?, ?)");
+    for (const [id, record] of next) {
+      const json = JSON.stringify(record);
+      if (json !== JSON.stringify(was.get(id))) insert.run(txn, id, json);
+    }
+    for (const id of was.keys()) if (!next.has(id)) insert.run(txn, id, null);
+  }
+
+  /** Core-only source feed. Cursor identity detects restored/replaced histories, including re-grown ones. */
+  collectionChanges(input: Record<string, unknown>, owner = ""): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const origin = (this.db.prepare("SELECT value FROM meta WHERE key = 'collection_origin'").get() as { value: string }).value;
+      const head = this.db.prepare("SELECT rev, txn FROM collection_changes ORDER BY rev DESC LIMIT 1").get() as { rev: number; txn: string } | undefined;
+      const rev = head?.rev ?? 0;
+      const txn = head?.txn ?? origin;
+      const cursor = input["tasks/task"] as { rev?: unknown; txn?: unknown } | undefined;
+      if (!cursor || typeof cursor !== "object") throw new Error("missing tasks/task cursor");
+      if (cursor.rev === null) return { "tasks/task": { head: rev, txn, changes: [], more: false } };
+      if (!Number.isSafeInteger(cursor.rev) || (cursor.rev as number) < 0 || typeof cursor.txn !== "string") throw new Error("invalid tasks/task cursor");
+      const held = cursor.rev === 0 ? origin : (this.db.prepare("SELECT txn FROM collection_changes WHERE rev = ?").get(cursor.rev) as { txn: string } | undefined)?.txn;
+      if (held !== cursor.txn) return { "tasks/task": { reset: true } };
+      const limit = typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 1000) : 1000;
+      const rows = this.db.prepare("SELECT rev, txn, id, record FROM collection_changes WHERE rev > ? ORDER BY rev LIMIT ?").all(cursor.rev, limit + 1) as Array<{ rev: number; txn: string; id: string; record: string | null }>;
+      // Core's offer accepts at most 4 MiB. Leave room for its envelope and paginate by
+      // serialized UTF-8 bytes as well as count (kept text can be much larger than a task title).
+      const changes: Array<Record<string, unknown>> = [];
+      let bytes = 0;
+      for (const r of rows.slice(0, limit)) {
+        const change = { op: r.record === null ? "delete" : "upsert", id: r.id, rev: r.rev, txn: r.txn,
+          ...(r.record === null ? {} : { audience: { owners: true }, record: loggedRecord(JSON.parse(r.record) as TaskRecord, owner) }) };
+        const size = Buffer.byteLength(JSON.stringify(change), "utf8") + 1;
+        if (bytes + size > 3 * 1024 * 1024) {
+          if (!changes.length) throw new Error("collection change exceeds byte budget");
+          break;
+        }
+        changes.push(change);
+        bytes += size;
+      }
+      // End on a transaction boundary unless the first transaction itself is larger than a page.
+      let end = changes.length;
+      if (rows.length > end && end && rows[end - 1].txn === rows[end].txn) {
+        let boundary = end;
+        while (boundary > 0 && rows[boundary - 1].txn === rows[end].txn) boundary--;
+        if (boundary) end = boundary;
+      }
+      changes.length = end;
+      return { "tasks/task": { head: rev, txn, changes, more: rows.length > end } };
+    })();
   }
 
   load(): StoreState {
@@ -227,6 +291,7 @@ export class SqliteStore {
       const { result, state } = apply(prev, command);
       if (result.ok !== true) return result; // nothing changes, nothing written
       this.persist(state);
+      this.logCollections(prev, state);
       const publishMirror = this.stageMirror(state);
       this.appendInteractions(buildInteractions(command, prev, state, result));
       publishMirror();

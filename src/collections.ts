@@ -6,7 +6,7 @@
 // Who sees what: the tasks piece's pages show every household owner the same tasks (it doesn't declare owners: 2),
 // so a record's audience is household owners, and this provider answers no rows to anyone else (an agent's token loom
 // let through its grants, an owner of some agents): it decides for its viewer before it pages, as the contract asks.
-// It has no change log yet: loom takes snapshots and works out what changed itself (the bridge).
+// Its SQLite binding commits a source change log with the state; changes carries only kept fields.
 import type { Link, Task } from "./core.js";
 import { stateOf } from "./thread-feed.js";
 
@@ -66,19 +66,14 @@ export function blockersOf(tasks: readonly Task[], links: readonly Link[]): Map<
  * in the ready queue (`taskstore ready`: open, not an epic, not blocked), so the queues are a filter, not a join.
  * `updated` isn't every change: an update (a title, an assignee, an ask) doesn't move it, and a
  * reopen can move it back, since the store keeps no time for those; loom's bridge still sees them, comparing whole
- * records. A change log (t-2029) would give a true one. Its comments are counted, never sent. */
+ * records. The source log carries all kept-field changes independently of this activity timestamp.
+ * Its comments are counted, never sent. */
 export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>, blockers: ReadonlyMap<string, string[]> = new Map(), owner = ""): TaskRecord {
   const on = blockers.get(t.id) ?? [];
   const times = [t.createdAt, t.startedAt, t.closedAt, ...t.comments.map((c) => c.at)].filter((x): x is string => typeof x === "string");
   const updated = times.reduce((a, b) => (b > a ? b : a), t.createdAt);
-  // A shared row cannot say "you": the owner and other-reader variants come from the SAME formatter as refs.
-  // A non-owner sentinel chooses the named wording even when owner is empty; no viewer's identity is cached.
-  const view = { tasks: [], links: [], owner, viewer: "" };
-  const other = stateOf(t, { ...view, viewer: "\u0000" }, on.length > 0);
-  const own = stateOf(t, { ...view, viewer: owner }, on.length > 0);
-  const refState = { status: other.status, tone: other.tone ?? null, owner: owner || null, ownerStatus: own.status };
   const r: TaskRecord = {
-    refState,
+    refState: refStateOf(t, on.length > 0, owner),
     id: t.id, title: t.title, type: t.type, status: t.status, priority: t.priority, created: t.createdAt, updated,
     closed: t.closedAt ?? null, closeReason: t.status === "closed" ? (t.closeReason ?? null) : null,
     blocked: on.length > 0, blockers: on, ready: t.status === "open" && t.type !== "epic" && on.length === 0,
@@ -151,4 +146,26 @@ export function answer(batch: Batch, tasks: readonly Task[], links: readonly Lin
     out.push(JSON.stringify({ id: q.id, more: page.length === q.limit && from + q.limit < live.length }));
   }
   return out;
+}
+
+/** One formatter for snapshots and logged records; no viewer's identity is stored in either. */
+export function refStateOf(t: Pick<Task, "status" | "closeReason" | "assignee">, blocked: boolean, owner: string) {
+  const view = { tasks: [], links: [], owner, viewer: "" };
+  const other = stateOf(t as Task, { ...view, viewer: "\u0000" }, blocked);
+  const own = stateOf(t as Task, { ...view, viewer: owner }, blocked);
+  return { status: other.status, tone: other.tone ?? null, owner: owner || null, ownerStatus: own.status };
+}
+
+/** The source log never keeps heavy bodies or configuration-dependent owner wording. */
+export function keptRecords(tasks: readonly Task[], links: readonly Link[]): Map<string, TaskRecord> {
+  const parents = new Map(links.filter((l) => l.type === "parent-child").map((l) => [l.id, l.dependsOn]));
+  const blockers = blockersOf(tasks, links);
+  return new Map(tasks.map((t) => {
+    const { description, refState, ...r } = recordOf(t, parents, blockers);
+    return [t.id, r as TaskRecord];
+  }));
+}
+
+export function loggedRecord(r: TaskRecord, owner: string): TaskRecord {
+  return { ...r, refState: refStateOf({ status: r.status as Task["status"], closeReason: r.closeReason as Task["closeReason"], assignee: r.assignee as string | undefined }, r.blocked === true, owner) };
 }

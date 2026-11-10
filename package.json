@@ -1,7 +1,7 @@
 {
   "name": "taskstore",
   "version": "0.7.0",
-  "description": "Art's first-party work store — pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
+  "description": "Art's first-party work store \u2014 pure transition core + bindings; conforms to spec/taskstore-core and to felag-tasks (felag interchange)",
   "bin": {
     "taskstore": "dist/cli.js",
     "loom-tasks": "dist/cli.js"
@@ -244,7 +244,13 @@
             }
           }
         }
-      }
+      },
+      "changes": [
+        "loom-tasks",
+        "collections",
+        "changes",
+        "--json"
+      ]
     }
   }
 }

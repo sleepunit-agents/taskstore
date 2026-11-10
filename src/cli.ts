@@ -541,9 +541,19 @@ if (verb === "thread-feed") {
 // `collections query`: loom's batch of queries for the tasks role's shared collection (src/collections.ts; loom
 // docs/specs/collections.md), one viewer's, on stdin; the answer as JSON lines. A read, like the feeds.
 if (verb === "collections") {
-  if (positional[0] !== "query") {
-    console.error("taskstore collections: query --json (a batch from loom on stdin)");
+  if (positional[0] !== "query" && positional[0] !== "changes") {
+    console.error("taskstore collections: query|changes --json (a batch from loom on stdin)");
     process.exit(2);
+  }
+  if (positional[0] === "changes") {
+    // This offer is called only by core; it has no viewer and every upsert states its audience.
+    if (!existsSync(dbPath) || !statSync(dbPath).isFile()) { console.error("task store unavailable"); process.exit(1); }
+    const cStore = new SqliteStore(dbPath);
+    try {
+      writeAll(JSON.stringify(cStore.collectionChanges(JSON.parse(readFileSync(0, "utf8")), process.env.TASKSTORE_OWNER?.trim() || "")) + "\n");
+    } catch { console.error("taskstore collections changes: invalid request or unavailable store"); process.exitCode = 1; }
+    finally { cStore.close(); }
+    process.exit(process.exitCode ?? 0);
   }
   let batch: Batch;
   try { batch = JSON.parse(readFileSync(0, "utf8")) as Batch; } catch {
