@@ -20,6 +20,10 @@
 // And what it leaves out: `import` (it reads a file path on loom's machine)
 // and the loom-facing verbs (api, ui).
 //
+// A call that wrote (a verb that changes the store, and it succeeded) answers
+// `changed: true` beside its status, so loom pulls the tasks' shared collection
+// at once instead of on its next 15 s pull (loom docs/extensions.md, "The API").
+//
 // An answer is held to loom's 512KB per answer, so stdout over 256KB comes
 // back gzipped and base64'd as stdoutGz (`list` on a real store is ~350KB).
 
@@ -42,7 +46,11 @@ export type RunCli = (argv: string[], actor: string) => Ran;
 export interface ApiAnswer {
   status: number;
   body: Record<string, unknown>;
+  changed?: true;
 }
+
+/** The verbs that change the store (cli.ts): a run of one that succeeded may have moved a task's record. */
+export const WRITES: ReadonlySet<string> = new Set(["create", "claim", "unclaim", "close", "reopen", "delete", "update", "comment", "link", "unlink"]);
 
 const REFUSED = new Set(["import", "api", "ui"]);
 const MAX_ARGS = 32;
@@ -83,5 +91,6 @@ export function answer(request: ApiRequest | null, env: NodeJS.ProcessEnv, runCl
   const body: Record<string, unknown> = { exit: r.exit, stderr: r.stderr.slice(0, 16 * 1024) };
   if (Buffer.byteLength(r.stdout) > PLAIN_STDOUT) body.stdoutGz = gzipSync(r.stdout).toString("base64");
   else body.stdout = r.stdout;
-  return { status: 200, body };
+  // A write that failed outright changed nothing; exit 3 is unlink's "no such edge", which changed nothing either.
+  return { status: 200, body, ...(r.exit === 0 && WRITES.has(argv[0]) ? { changed: true as const } : {}) };
 }

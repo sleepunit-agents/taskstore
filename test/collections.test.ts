@@ -38,6 +38,12 @@ const s = state([
   { op: "comment", id: "t-5", text: "later" },
   { op: "create", title: "Yours", source: `conversation:${CV}`, priority: 2 },    // t-6
   { op: "update", id: "t-6", set: { assignee: "jonathan", ask: "Is it right?" } },
+  { op: "create", title: "Waits on the started one", priority: 1 },              // t-7
+  { op: "link", id: "t-7", dependsOn: "t-3", type: "blocks" },
+  { op: "create", title: "Was blocked by the closed one", priority: 2 },         // t-8
+  { op: "link", id: "t-8", dependsOn: "t-4", type: "blocks" },
+  { op: "create", title: "Dropped", priority: 4 },                               // t-9
+  { op: "close", id: "t-9", reason: "cancelled" },
 ]);
 
 const OWNER = { kind: "member", household: true };
@@ -83,6 +89,19 @@ describe("the tasks collection", () => {
     expect(made).toEqual(s.tasks.filter((t) => t.source === `conversation:${CV}`).map((t) => t.id).sort());
     const asks = rows({ viewer: OWNER, queries: [q({ where: [["ask", "has"]], fields: ["ask", "assignee"] })] });
     expect(asks).toEqual([{ id: "t-6", ask: "Is it right?", assignee: "jonathan", audience: { owners: true } }]);
+  });
+
+  it("parity: the ready and blocked queues are a filter on the record, as `ready` and the Tasks page have them", () => {
+    const ready = apply(s, { op: "ready", actor: "art", at: at(59) } as Command).result as { entries: Array<{ id: string }> };
+    const live = rows({ viewer: OWNER, queries: [q({ where: [["ready", "eq", true]], order: [["priority", "asc"], ["created", "asc"]] })] });
+    expect(live.map((r) => r.id)).toEqual(ready.entries.map((e) => e.id));
+    expect(live.map((r) => r.id)).toContain("t-8");   // its blocker is closed
+    const blocked = rows({ viewer: OWNER, queries: [q({ where: [["blocked", "eq", true]], fields: ["blockers"] })] });
+    expect(blocked.map((r) => [r.id, r.blockers])).toEqual([["t-7", ["t-3"]]]);
+    const [t9] = rows({ viewer: OWNER, queries: [q({ where: [["closeReason", "eq", "cancelled"]], fields: ["closeReason"] })] });
+    expect(t9.id).toBe("t-9");
+    // An open task's closeReason is null, whatever the store kept.
+    expect(rows({ viewer: OWNER, queries: [q({ where: [["status", "eq", "open"]], fields: ["closeReason", "ready", "blocked"] })] }).every((r) => r.closeReason === null)).toBe(true);
   });
 
   it("answers loom and household owners, and no one else, before it pages", () => {
