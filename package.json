@@ -59,11 +59,167 @@
     "sections": {
       "project": {
         "label": "Tasks",
-        "argv": ["loom-tasks", "project-feed", "--json"]
+        "argv": [
+          "loom-tasks",
+          "project-feed",
+          "--json"
+        ]
       },
       "thread": {
         "label": "Tasks",
-        "argv": ["loom-tasks", "thread-feed", "--json"]
+        "argv": [
+          "loom-tasks",
+          "thread-feed",
+          "--json"
+        ]
+      }
+    },
+    "collections": {
+      "query": [
+        "loom-tasks",
+        "collections",
+        "query",
+        "--json"
+      ],
+      "types": {
+        "task": {
+          "version": "1.0",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              }
+            }
+          },
+          "fields": {
+            "title": {
+              "class": "household",
+              "search": true
+            },
+            "type": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "in"
+              ]
+            },
+            "status": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "in"
+              ],
+              "order": true
+            },
+            "priority": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "in",
+                "lte",
+                "gte"
+              ],
+              "order": true
+            },
+            "assignee": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "in",
+                "has"
+              ]
+            },
+            "created": {
+              "class": "household",
+              "filter": [
+                "lt",
+                "lte",
+                "gt",
+                "gte"
+              ],
+              "order": true
+            },
+            "updated": {
+              "class": "household",
+              "filter": [
+                "lt",
+                "lte",
+                "gt",
+                "gte"
+              ],
+              "order": true
+            },
+            "closed": {
+              "class": "household",
+              "filter": [
+                "has",
+                "gte"
+              ],
+              "order": true
+            },
+            "parent": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "has"
+              ]
+            },
+            "source": {
+              "class": "household",
+              "filter": [
+                "eq",
+                "prefix",
+                "has"
+              ]
+            },
+            "goal": {
+              "class": "household"
+            },
+            "why": {
+              "class": "household"
+            },
+            "doneWhen": {
+              "class": "household"
+            },
+            "ask": {
+              "class": "household",
+              "filter": [
+                "has"
+              ]
+            },
+            "comments": {
+              "class": "household"
+            },
+            "description": {
+              "class": "household",
+              "heavy": true,
+              "search": true
+            }
+          },
+          "default_fields": [
+            "title",
+            "type",
+            "status",
+            "priority",
+            "assignee",
+            "updated"
+          ],
+          "max_page": 500,
+          "aggregates": {
+            "count": {
+              "by": [
+                "status"
+              ]
+            }
+          }
+        }
       }
     }
   }
