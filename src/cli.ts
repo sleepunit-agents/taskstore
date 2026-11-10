@@ -35,6 +35,7 @@
 //                                    (loom's project hub; see src/project-feed.ts)
 //   taskstore thread-feed --json --conversation <cv-…> [--ref <ref>]...
 //                                    (a loom Comms thread's work; see src/thread-feed.ts)
+//   taskstore collections query --json  (loom's shared collection of tasks, a batch on stdin; see src/collections.ts)
 //
 // Store path: $TASKSTORE_DB, else ./.taskstore/store.db relative to cwd.
 
@@ -49,6 +50,7 @@ import { answer, type ApiRequest } from "./loom-api.js";
 import { describe as describeFinding, EXAMPLE, lint, PLAIN_RULE, type Finding, type PlainField } from "./plain.js";
 import { feed, parseFeedArgs } from "./project-feed.js";
 import { parseThreadArgs, threadFeed } from "./thread-feed.js";
+import { answer as collectionsAnswer, type Batch } from "./collections.js";
 import { spawn, spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
@@ -505,6 +507,30 @@ if (verb === "thread-feed") {
   feedStore.close();
   const out = threadFeed({ tasks: all.tasks ?? [], links: all.links ?? [], owner: process.env.TASKSTORE_OWNER?.trim() || "", viewer }, args);
   writeAll(JSON.stringify(out) + "\n");
+  process.exit(0);
+}
+
+// `collections query`: loom's batch of queries for the tasks role's shared collection (src/collections.ts; loom
+// docs/specs/collections.md), one viewer's, on stdin; the answer as JSON lines. A read, like the feeds.
+if (verb === "collections") {
+  if (positional[0] !== "query") {
+    console.error("taskstore collections: query --json (a batch from loom on stdin)");
+    process.exit(2);
+  }
+  let batch: Batch;
+  try { batch = JSON.parse(readFileSync(0, "utf8")) as Batch; } catch {
+    console.error("taskstore collections query: stdin is loom's batch, as JSON");
+    process.exit(2);
+  }
+  if (!existsSync(dbPath) || !statSync(dbPath).isFile()) {
+    // No store yet: every query is unavailable, never an empty answer that reads as "no tasks".
+    writeAll((batch.queries ?? []).map((q) => JSON.stringify({ id: q.id, error: "unavailable" })).join("\n") + "\n");
+    process.exit(0);
+  }
+  const cStore = new SqliteStore(dbPath);
+  const all = cStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
+  cStore.close();
+  writeAll(collectionsAnswer(batch, all.tasks ?? [], all.links ?? []).join("\n") + "\n");
   process.exit(0);
 }
 
