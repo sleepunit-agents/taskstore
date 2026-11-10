@@ -46,8 +46,10 @@ export type TaskRecord = Record<string, unknown> & { id: string };
 /** Whether this viewer is one the tasks' pages show: loom itself, or a household owner. */
 export const seesTasks = (viewer: Batch["viewer"]): boolean => viewer?.kind === "core" || (viewer?.kind === "member" && viewer.household === true);
 
-/** A task as its record: the store's own fields, its parent, and when it last moved (its newest time: made, started,
- * closed, or its newest comment). Its comments are counted, never sent. */
+/** A task as its record: the store's own fields, its parent, and `updated`, its newest activity (made, started, closed,
+ * or its newest comment). That isn't every change: an update (a title, an assignee, an ask) doesn't move it, and a
+ * reopen can move it back, since the store keeps no time for those; loom's bridge still sees them, comparing whole
+ * records. A change log (t-2029) would give a true one. Its comments are counted, never sent. */
 export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>): TaskRecord {
   const times = [t.createdAt, t.startedAt, t.closedAt, ...t.comments.map((c) => c.at)].filter((x): x is string => typeof x === "string");
   const updated = times.reduce((a, b) => (b > a ? b : a), t.createdAt);
