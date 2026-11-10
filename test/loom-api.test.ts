@@ -191,6 +191,9 @@ case "$s" in S:*:cv-*) a=\${s#S:}; a=\${a%%:*}; c=\${s##*:}; printf '{"ok":true,
       const bad = run(["create", "odd house", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, house }, e);
       expect(source(bad.body)).toBeUndefined();
     }
+    // A service's houseless token (a bridge on loom's machine) is no body's.
+    const svc = run(["create", "from a bridge", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, service: "slack" }, e);
+    expect(source(svc.body)).toBeUndefined();
     expect(said().length).toBe(n);
   });
 

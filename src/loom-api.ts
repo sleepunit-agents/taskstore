@@ -41,7 +41,7 @@
 import { gzipSync } from "node:zlib";
 
 export interface ApiRequest {
-  caller?: { kind?: string; agent?: string; subject?: string; granted?: unknown; house?: unknown };
+  caller?: { kind?: string; agent?: string; subject?: string; granted?: unknown; house?: unknown; service?: unknown };
   path?: string;
   body?: { argv?: unknown };
 }
@@ -63,11 +63,13 @@ export type VerifyStatement = (statement: string, house?: string) => Verified | 
 
 /**
  * The house the piece API says a call came from (core's word, from the house's own token; as approvals does since
- * t-2136): "-" for an agent's call from no house, false for a house id that isn't one (then nothing verifies).
+ * t-2136): "-" for an agent's call from no house, false for a house id that isn't one or a houseless service's call
+ * (then nothing verifies).
  */
 export function callerHouse(caller: ApiRequest["caller"]): string | false {
   const h = caller?.house;
-  if (h === undefined || h === null) return "-";
+  // A service's token with no house (a bridge on loom's machine) is no body's: it never presents a statement.
+  if (h === undefined || h === null) return caller?.service !== undefined && caller?.service !== null ? false : "-";
   return typeof h === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(h) ? h : false;
 }
 
