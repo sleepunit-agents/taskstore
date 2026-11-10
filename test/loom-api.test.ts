@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -123,5 +123,61 @@ describe("taskstore api", () => {
     });
     expect(r.status).toBe(1);
     expect(existsSync(missing)).toBe(false);
+  });
+});
+
+describe("taskstore api: where a task came from (t-2117)", () => {
+  // A stand-in runtime: `--verify` with "S:<agent>:<cv>" on stdin verifies as that agent's statement for that conversation.
+  let rt: string;
+  beforeAll(() => {
+    rt = join(mkdtempSync(join(tmpdir(), "ts-rt-")), "rt");
+    writeFileSync(rt, `#!/bin/sh
+[ "$1" = "--verify" ] || exit 2
+s=$(cat)
+case "$s" in S:*:cv-*) a=\${s#S:}; a=\${a%%:*}; c=\${s##*:}; printf '{"ok":true,"agent":"%s","conversation":"%s"}' "$a" "$c";; *) echo '{"ok":false}'; exit 1;; esac
+`);
+    chmodSync(rt, 0o755);
+  });
+  const env = () => ({ TASKSTORE_PRINCIPAL: rt });
+  const source = (b: Record<string, unknown>) => out(run(["show", out(b).id as string]).body).task.source as string | undefined;
+  const mine = "conversation:cv-0123456789ab";
+
+  it("keeps a conversation source the body's statement is for, and takes the statement off", () => {
+    const r = run(["create", "made here", "--source", mine, "--principal", "S:art:cv-0123456789ab"], art, env());
+    expect(r.body.exit, String(r.body.stderr)).toBe(0);
+    expect(source(r.body)).toBe(mine);
+  });
+
+  it("takes out one its statement isn't for, or with no statement, and still writes the task", () => {
+    for (const [p, why] of [[["--principal", "S:art:cv-00000000000f"], "isn't in"], [[], "needs the runtime's word"],
+      [["--principal", "junk"], "needs the runtime's word"], [["--principal", "S:eve:cv-0123456789ab"], "needs the runtime's word"]] as const) {
+      const r = run(["create", "made elsewhere", "--source", mine, ...p], art, env());
+      expect(r.body.exit, String(r.body.stderr)).toBe(0);
+      expect(source(r.body)).toBeUndefined();
+      expect(String(r.body.stderr)).toContain(why);
+    }
+  });
+
+  it("checks every --source given, and an update's too", () => {
+    const made = run(["create", "to move"], art, env());
+    const id = out(made.body).id as string;
+    const two = run(["create", "two", "--source", mine, "--source", "conversation:cv-00000000000f", "--principal", "S:art:cv-0123456789ab"], art, env());
+    expect(source(two.body)).toBeUndefined();
+    const up = run(["update", id, "--source", "conversation:cv-00000000000f", "--priority", "2", "--principal", "S:art:cv-0123456789ab"], art, env());
+    expect(up.body.exit, String(up.body.stderr)).toBe(0);
+    expect(out(run(["show", id]).body).task.source).toBeUndefined();
+    // Other kinds of source aren't a thread's: as before.
+    const gh = run(["create", "from an issue", "--source", "github:acme/app#3"], art, env());
+    expect(source(gh.body)).toBe("github:acme/app#3");
+  });
+
+  it("a principal typed mid-command is the body's own words: the CLI refuses it", () => {
+    const r = run(["create", "x", "--principal", "S:art:cv-0123456789ab", "--source", mine], art, env());
+    expect(r.body.exit).toBe(2);
+  });
+
+  it("the owner names a conversation itself", () => {
+    const r = run(["create", "the owner's", "--source", mine], { kind: "owner" }, env());
+    expect(source(r.body)).toBe(mine);
   });
 });

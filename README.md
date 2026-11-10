@@ -40,8 +40,15 @@ thread carries `source: "conversation:<cv>"` (taskstore-core's `it-ts-source`):
 `--source` on `create` and `update` sets it, and without it a body that has
 `LOOM_BODY_CONVERSATION` in its environment gives that conversation to a create,
 and to an update of a task with no source yet. loom's `run` API carries no
-environment, so a body in a house passes `--source` itself. The task's page
-shows where it came from with a `from` block, which loom draws per viewer.
+environment, so a body in a house passes `--source` itself. Over the API an
+agent's `conversation:` source is kept only when the runtime vouches that the
+body is in that conversation (t-2117): its house's `piece-call` appends the
+runtime's signed statement (`--principal <statement>`), which the piece checks
+with `loom runtime principal --verify` (`TASKSTORE_PRINCIPAL` names another
+command) and takes off before the CLI runs. A source its statement isn't for,
+or one with no statement, is taken out, the rest is written, and stderr says
+why. The task's page shows where it came from with a `from` block, which loom
+draws per viewer.
 
 Over loom's piece API (`POST /api/tasks/run`, body `{"argv": ["ready"]}`) a body
 that isn't on loom's machine, such as a house, runs any CLI command against the
