@@ -557,7 +557,7 @@ if (verb === "collections") {
   const cStore = new SqliteStore(dbPath);
   const all = cStore.run({ op: "export" }) as { tasks?: Task[]; links?: Link[] };
   cStore.close();
-  writeAll(collectionsAnswer(batch, all.tasks ?? [], all.links ?? []).join("\n") + "\n");
+  writeAll(collectionsAnswer(batch, all.tasks ?? [], all.links ?? [], process.env.TASKSTORE_OWNER?.trim() || "").join("\n") + "\n");
   process.exit(0);
 }
 
