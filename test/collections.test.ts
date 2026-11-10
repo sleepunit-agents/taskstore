@@ -104,6 +104,28 @@ describe("the tasks collection", () => {
     expect(rows({ viewer: OWNER, queries: [q({ where: [["status", "eq", "open"]], fields: ["closeReason", "ready", "blocked"] })] }).every((r) => r.closeReason === null)).toBe(true);
   });
 
+  it("publishes both reader wordings from the thread-feed formatter, including closed and blocked precedence", () => {
+    const query = q({ fields: ["refState"] });
+    for (const owner of ["jonathan", "other-owner", ""]) {
+      const got = answer({ viewer: { kind: "core" }, queries: [query] }, s.tasks, s.links, owner)
+        .map((l) => JSON.parse(l)).filter((l) => l.row).map((l) => l.row);
+      for (const viewer of [owner, "another-person"]) {
+        const fed = threadFeed({ tasks: s.tasks, links: s.links, owner, viewer }, { conversation: CV, refs: s.tasks.map((t) => t.id) });
+        for (const row of got) {
+          const state = row.refState;
+          const expected = fed.items.find((item) => item.ref === row.id)!;
+          expect({ status: owner && viewer === owner ? state.ownerStatus : state.status, tone: state.tone ?? undefined })
+            .toEqual({ status: expected.status, tone: expected.tone });
+        }
+      }
+      expect(got.find((r) => r.id === "t-9").refState).toMatchObject({ status: "Cancelled", tone: null });
+      expect(got.find((r) => r.id === "t-7").refState).toMatchObject({ status: "Blocked", tone: "bad" });
+    }
+    for (const viewer of [{ kind: "agent" }, { kind: "member", household: false }]) {
+      expect(answer({ viewer, queries: [query] }, s.tasks, s.links, "jonathan").map((l) => JSON.parse(l))).toEqual([{ id: "q", more: false }]);
+    }
+  });
+
   it("answers loom and household owners, and no one else, before it pages", () => {
     expect(rows({ viewer: { kind: "core" }, queries: [q()] })).toHaveLength(s.tasks.length);
     for (const viewer of [{ kind: "agent" }, { kind: "member", household: false }, undefined]) {
@@ -125,8 +147,8 @@ describe("the tasks collection", () => {
     const db = join(dir, "store.db");
     const cli = join(new URL("..", import.meta.url).pathname, "src", "cli.ts");
     const tsx = join(new URL("..", import.meta.url).pathname, "node_modules", ".bin", "tsx");
-    const env = { ...process.env, TASKSTORE_DB: db, TASKSTORE_ACTOR: "art" };
-    const batch = JSON.stringify({ viewer: OWNER, queries: [q({ fields: ["title"] })] });
+    const env = { ...process.env, TASKSTORE_DB: db, TASKSTORE_ACTOR: "art", TASKSTORE_OWNER: "jonathan" };
+    const batch = JSON.stringify({ viewer: OWNER, queries: [q({ fields: ["title", "refState"] })] });
     const none = spawnSync(tsx, [cli, "collections", "query", "--json"], { env, input: batch, encoding: "utf8" });
     expect(none.status).toBe(0);
     expect(none.stdout.trim()).toBe(JSON.stringify({ id: "q", error: "unavailable" }));
@@ -134,6 +156,6 @@ describe("the tasks collection", () => {
     const got = spawnSync(tsx, [cli, "collections", "query", "--json"], { env, input: batch, encoding: "utf8" });
     expect(got.status).toBe(0);
     const lines = got.stdout.trim().split("\n").map((l) => JSON.parse(l));
-    expect(lines).toEqual([{ id: "q", row: { id: "t-1", title: "Made by the CLI", audience: { owners: true } } }, { id: "q", more: false }]);
+    expect(lines).toEqual([{ id: "q", row: { id: "t-1", title: "Made by the CLI", refState: { status: "Open", tone: null, owner: "jonathan", ownerStatus: "Open" }, audience: { owners: true } } }, { id: "q", more: false }]);
   });
 });

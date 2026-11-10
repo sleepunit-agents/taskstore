@@ -8,12 +8,14 @@
 // let through its grants, an owner of some agents): it decides for its viewer before it pages, as the contract asks.
 // It has no change log yet: loom takes snapshots and works out what changed itself (the bridge).
 import type { Link, Task } from "./core.js";
+import { stateOf } from "./thread-feed.js";
 
 /** The record type, as package.json's loom.collections declares it (test/collections.test.ts holds the two equal). */
 export const TASK_TYPE = {
-  version: "1.1",
+  version: "1.2",
   schema: { type: "object", properties: { title: { type: "string" }, status: { type: "string" }, priority: { type: "number" } } },
   fields: {
+    refState: { class: "household" },
     title: { class: "household", search: true },
     type: { class: "household", filter: ["eq", "in"] },
     status: { class: "household", filter: ["eq", "in"], order: true },
@@ -65,11 +67,18 @@ export function blockersOf(tasks: readonly Task[], links: readonly Link[]): Map<
  * `updated` isn't every change: an update (a title, an assignee, an ask) doesn't move it, and a
  * reopen can move it back, since the store keeps no time for those; loom's bridge still sees them, comparing whole
  * records. A change log (t-2029) would give a true one. Its comments are counted, never sent. */
-export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>, blockers: ReadonlyMap<string, string[]> = new Map()): TaskRecord {
+export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>, blockers: ReadonlyMap<string, string[]> = new Map(), owner = ""): TaskRecord {
   const on = blockers.get(t.id) ?? [];
   const times = [t.createdAt, t.startedAt, t.closedAt, ...t.comments.map((c) => c.at)].filter((x): x is string => typeof x === "string");
   const updated = times.reduce((a, b) => (b > a ? b : a), t.createdAt);
+  // A shared row cannot say "you": the owner and other-reader variants come from the SAME formatter as refs.
+  // A non-owner sentinel chooses the named wording even when owner is empty; no viewer's identity is cached.
+  const view = { tasks: [], links: [], owner, viewer: "" };
+  const other = stateOf(t, { ...view, viewer: "\u0000" }, on.length > 0);
+  const own = stateOf(t, { ...view, viewer: owner }, on.length > 0);
+  const refState = { status: other.status, tone: other.tone ?? null, owner: owner || null, ownerStatus: own.status };
   const r: TaskRecord = {
+    refState,
     id: t.id, title: t.title, type: t.type, status: t.status, priority: t.priority, created: t.createdAt, updated,
     closed: t.closedAt ?? null, closeReason: t.status === "closed" ? (t.closeReason ?? null) : null,
     blocked: on.length > 0, blockers: on, ready: t.status === "open" && t.type !== "epic" && on.length === 0,
@@ -120,10 +129,10 @@ function cmpKeys(a: unknown[], b: unknown[], order: readonly Order[]): number {
  * declared fields, its limit within max_page, its fields the ones to send. Rows are filtered for the viewer before
  * they're paged, and carry only the fields asked for, the order's, and their audience.
  */
-export function answer(batch: Batch, tasks: readonly Task[], links: readonly Link[]): string[] {
+export function answer(batch: Batch, tasks: readonly Task[], links: readonly Link[], owner = ""): string[] {
   const parentOf = new Map(links.filter((l) => l.type === "parent-child").map((l) => [l.id, l.dependsOn]));
   const blockers = blockersOf(tasks, links);
-  const mine = seesTasks(batch.viewer) ? tasks.map((t) => recordOf(t, parentOf, blockers)) : [];
+  const mine = seesTasks(batch.viewer) ? tasks.map((t) => recordOf(t, parentOf, blockers, owner)) : [];
   const out: string[] = [];
   for (const q of batch.queries ?? []) {
     if (q.type !== "task") { out.push(JSON.stringify({ id: q.id, error: "unsupported-version" })); continue; }
