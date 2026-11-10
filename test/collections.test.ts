@@ -54,7 +54,7 @@ const rows = (batch: Batch) => run(batch).filter((l) => l.row).map((l) => l.row 
 describe("the tasks collection", () => {
   it("declares in package.json exactly what the module answers", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { loom: { collections: Record<string, unknown> } };
-    expect(pkg.loom.collections).toEqual({ query: ["loom-tasks", "collections", "query", "--json"], changes: ["loom-tasks", "collections", "changes", "--json"], types: { task: JSON.parse(JSON.stringify(TASK_TYPE)) } });
+    expect(pkg.loom.collections).toEqual({ query_serve: true, query: ["loom-tasks", "collections", "query", "--json"], changes: ["loom-tasks", "collections", "changes", "--json"], types: { task: JSON.parse(JSON.stringify(TASK_TYPE)) } });
   });
 
   it("answers every task once, whole, across keyset pages in order", () => {
