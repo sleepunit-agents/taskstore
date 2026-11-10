@@ -11,7 +11,7 @@ import type { Link, Task } from "./core.js";
 
 /** The record type, as package.json's loom.collections declares it (test/collections.test.ts holds the two equal). */
 export const TASK_TYPE = {
-  version: "1.0",
+  version: "1.1",
   schema: { type: "object", properties: { title: { type: "string" }, status: { type: "string" }, priority: { type: "number" } } },
   fields: {
     title: { class: "household", search: true },
@@ -22,6 +22,10 @@ export const TASK_TYPE = {
     created: { class: "household", filter: ["lt", "lte", "gt", "gte"], order: true },
     updated: { class: "household", filter: ["lt", "lte", "gt", "gte"], order: true },
     closed: { class: "household", filter: ["has", "gte"], order: true },
+    closeReason: { class: "household", filter: ["eq"] },
+    blocked: { class: "household", filter: ["eq"] },
+    blockers: { class: "household" },
+    ready: { class: "household", filter: ["eq"] },
     parent: { class: "household", filter: ["eq", "has"] },
     source: { class: "household", filter: ["eq", "prefix", "has"] },
     goal: { class: "household" },
@@ -46,16 +50,30 @@ export type TaskRecord = Record<string, unknown> & { id: string };
 /** Whether this viewer is one the tasks' pages show: loom itself, or a household owner. */
 export const seesTasks = (viewer: Batch["viewer"]): boolean => viewer?.kind === "core" || (viewer?.kind === "member" && viewer.household === true);
 
+/** What a record says of the store's links (the ready and blocked queues): each task's open blockers, by id, in the
+ * order they were linked. A blocker that's gone from the store or closed blocks nothing (core.ts blockedIds). */
+export function blockersOf(tasks: readonly Task[], links: readonly Link[]): Map<string, string[]> {
+  const open = new Set(tasks.filter((t) => t.status !== "closed").map((t) => t.id));
+  const out = new Map<string, string[]>();
+  for (const l of links) if (l.type === "blocks" && open.has(l.dependsOn)) out.set(l.id, [...(out.get(l.id) ?? []), l.dependsOn]);
+  return out;
+}
+
 /** A task as its record: the store's own fields, its parent, and `updated`, its newest activity (made, started, closed,
- * or its newest comment). That isn't every change: an update (a title, an assignee, an ask) doesn't move it, and a
+ * or its newest comment). `blocked` is whether any blocker is still open (`blockers`, which), and `ready` whether it's
+ * in the ready queue (`taskstore ready`: open, not an epic, not blocked), so the queues are a filter, not a join.
+ * `updated` isn't every change: an update (a title, an assignee, an ask) doesn't move it, and a
  * reopen can move it back, since the store keeps no time for those; loom's bridge still sees them, comparing whole
  * records. A change log (t-2029) would give a true one. Its comments are counted, never sent. */
-export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>): TaskRecord {
+export function recordOf(t: Task, parentOf: ReadonlyMap<string, string>, blockers: ReadonlyMap<string, string[]> = new Map()): TaskRecord {
+  const on = blockers.get(t.id) ?? [];
   const times = [t.createdAt, t.startedAt, t.closedAt, ...t.comments.map((c) => c.at)].filter((x): x is string => typeof x === "string");
   const updated = times.reduce((a, b) => (b > a ? b : a), t.createdAt);
   const r: TaskRecord = {
     id: t.id, title: t.title, type: t.type, status: t.status, priority: t.priority, created: t.createdAt, updated,
-    closed: t.closedAt ?? null, assignee: t.assignee ?? null, parent: parentOf.get(t.id) ?? null, source: t.source ?? null,
+    closed: t.closedAt ?? null, closeReason: t.status === "closed" ? (t.closeReason ?? null) : null,
+    blocked: on.length > 0, blockers: on, ready: t.status === "open" && t.type !== "epic" && on.length === 0,
+    assignee: t.assignee ?? null, parent: parentOf.get(t.id) ?? null, source: t.source ?? null,
     goal: t.goal ?? null, why: t.why ?? null, doneWhen: t.doneWhen ?? null, ask: t.ask ?? null, comments: t.comments.length,
     description: t.description ?? null, audience: { owners: true },
   };
@@ -104,7 +122,8 @@ function cmpKeys(a: unknown[], b: unknown[], order: readonly Order[]): number {
  */
 export function answer(batch: Batch, tasks: readonly Task[], links: readonly Link[]): string[] {
   const parentOf = new Map(links.filter((l) => l.type === "parent-child").map((l) => [l.id, l.dependsOn]));
-  const mine = seesTasks(batch.viewer) ? tasks.map((t) => recordOf(t, parentOf)) : [];
+  const blockers = blockersOf(tasks, links);
+  const mine = seesTasks(batch.viewer) ? tasks.map((t) => recordOf(t, parentOf, blockers)) : [];
   const out: string[] = [];
   for (const q of batch.queries ?? []) {
     if (q.type !== "task") { out.push(JSON.stringify({ id: q.id, error: "unsupported-version" })); continue; }

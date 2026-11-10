@@ -83,7 +83,7 @@
       ],
       "types": {
         "task": {
-          "version": "1.0",
+          "version": "1.1",
           "schema": {
             "type": "object",
             "properties": {
@@ -163,6 +163,27 @@
                 "gte"
               ],
               "order": true
+            },
+            "closeReason": {
+              "class": "household",
+              "filter": [
+                "eq"
+              ]
+            },
+            "blocked": {
+              "class": "household",
+              "filter": [
+                "eq"
+              ]
+            },
+            "blockers": {
+              "class": "household"
+            },
+            "ready": {
+              "class": "household",
+              "filter": [
+                "eq"
+              ]
             },
             "parent": {
               "class": "household",

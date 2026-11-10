@@ -19,7 +19,7 @@ function api(request: unknown, env: Record<string, string> = {}) {
     encoding: "utf8",
   });
   expect(r.status, r.stderr).toBe(0);
-  return JSON.parse(r.stdout) as { status: number; body: Record<string, unknown> };
+  return JSON.parse(r.stdout) as { status: number; body: Record<string, unknown>; changed?: true };
 }
 const art = { kind: "agent", agent: "art" };
 const run = (argv: string[], caller: unknown = art, env?: Record<string, string>) => api({ caller, path: "run", body: { argv } }, env);
@@ -49,6 +49,17 @@ describe("taskstore api", () => {
     const bad = run(["list", "--bogus", "x"]);
     expect(bad.body.exit).toBe(2);
     expect(String(bad.body.stderr)).toContain("--bogus");
+  });
+
+  it("says changed only beside a write that succeeded, so loom pulls the shared collection at once", () => {
+    const made = run(["create", "moves the record"]);
+    expect(made.changed).toBe(true);
+    const id = out(made.body).id as string;
+    expect(run(["comment", id, "a note"]).changed).toBe(true);
+    // Reads, a write that was refused, and unlink's "no such edge" moved nothing.
+    for (const argv of [["show", id], ["ready"], ["list"], ["update", "t-99999", "--title", "x"], ["unlink", id, "t-1", "--type", "blocks"]]) {
+      expect(run(argv), argv.join(" ")).not.toHaveProperty("changed");
+    }
   });
 
   it("takes the actor from loom's caller, never from the request", () => {
