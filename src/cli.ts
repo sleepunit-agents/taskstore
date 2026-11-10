@@ -310,9 +310,10 @@ if (verb === "api") {
 /**
  * The runtime's word on a principal statement (t-2117): `<TASKSTORE_PRINCIPAL> --verify` with the statement on stdin
  * (default `loom runtime principal`: `loom` on PATH, else ~/.local/bin/loom). Its answer only with exit 0 and
- * `ok: true`; the statement itself is never logged.
+ * `ok: true`; the statement itself is never logged. With the caller's house (`--house`, t-2137), it holds only from
+ * the house running its conversation's body.
  */
-function verifyStatement(statement: string): { agent?: unknown; conversation?: unknown } | null {
+function verifyStatement(statement: string, house?: string): { agent?: unknown; conversation?: unknown } | null {
   const named = process.env.TASKSTORE_PRINCIPAL?.trim();
   let cmd: string[];
   if (named) cmd = named.split(/\s+/);
@@ -321,7 +322,7 @@ function verifyStatement(statement: string): { agent?: unknown; conversation?: u
     const home = join(homedir(), ".local", "bin", "loom");
     cmd = [onPath ?? (existsSync(home) ? home : "loom"), "runtime", "principal"];
   }
-  const r = spawnSync(cmd[0], [...cmd.slice(1), "--verify"], {
+  const r = spawnSync(cmd[0], [...cmd.slice(1), "--verify", ...(house ? ["--house", house] : [])], {
     input: statement, encoding: "utf8", timeout: 10_000,
     env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "HOUSE_ID" && k !== "LOOM_BODY_CONVERSATION")),
   });

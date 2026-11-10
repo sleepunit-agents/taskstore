@@ -25,7 +25,9 @@
 // conversation (t-2117). A house's piece-call appends the runtime's signed
 // statement (`--principal <statement>`, taken off here before the CLI runs);
 // the source is kept only when that statement verifies (`loom runtime
-// principal --verify`), is this same agent's, and is for that conversation.
+// principal --verify --house <the caller's house>`), is this same agent's,
+// and is for that conversation: a statement holds only from the house running
+// its conversation's body, never one shown to another (t-2137).
 // Otherwise the flag is taken out, the rest of the command runs, and stderr
 // says why. The owner's own calls say it themselves.
 //
@@ -39,7 +41,7 @@
 import { gzipSync } from "node:zlib";
 
 export interface ApiRequest {
-  caller?: { kind?: string; agent?: string; subject?: string; granted?: unknown };
+  caller?: { kind?: string; agent?: string; subject?: string; granted?: unknown; house?: unknown };
   path?: string;
   body?: { argv?: unknown };
 }
@@ -52,9 +54,22 @@ export interface Ran {
 
 export type RunCli = (argv: string[], actor: string) => Ran;
 
-/** The runtime's word on a statement (`loom runtime principal --verify`), or null when it doesn't verify. */
+/**
+ * The runtime's word on a statement (`loom runtime principal --verify`), or null when it doesn't verify. `house` is the
+ * caller's (`--house`, t-2137): the statement holds only from the house running its conversation's body.
+ */
 export interface Verified { agent?: unknown; conversation?: unknown }
-export type VerifyStatement = (statement: string) => Verified | null;
+export type VerifyStatement = (statement: string, house?: string) => Verified | null;
+
+/**
+ * The house the piece API says a call came from (core's word, from the house's own token; as approvals does since
+ * t-2136): "-" for an agent's call from no house, false for a house id that isn't one (then nothing verifies).
+ */
+export function callerHouse(caller: ApiRequest["caller"]): string | false {
+  const h = caller?.house;
+  if (h === undefined || h === null) return "-";
+  return typeof h === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(h) ? h : false;
+}
 
 /**
  * argv without the `--principal <statement>` a house's piece-call appends, and that statement ("" when none). Only a
@@ -88,13 +103,13 @@ const CONVERSATION_SOURCE = /^conversation:(.*)$/s;
  * argv with any conversation source this agent's statement doesn't prove taken out, and why (t-2117). null when the
  * argv stands as it is.
  */
-export function provenSource(argv: string[], agent: string, statement: string, verify: VerifyStatement): { argv: string[]; why: string } | null {
+export function provenSource(argv: string[], agent: string, statement: string, verify: VerifyStatement, house: string | false = "-"): { argv: string[]; why: string } | null {
   const at = sourceFlags(argv);
   const claimed = at.map((i) => CONVERSATION_SOURCE.exec(argv[i + 1] ?? "")?.[1]).filter((x): x is string => x !== undefined);
   if (!claimed.length) return null;
   let v: Verified | null = null;
-  if (statement) {
-    try { v = verify(statement); } catch { v = null; }
+  if (statement && house !== false) {
+    try { v = verify(statement, house); } catch { v = null; }
   }
   const own = v && v.agent === agent && typeof v.conversation === "string" && /^cv-[0-9a-f]{12}$/.test(v.conversation) ? v.conversation : null;
   if (own && claimed.every((c) => c === own)) return null;
@@ -154,7 +169,7 @@ export function answer(request: ApiRequest | null, env: NodeJS.ProcessEnv, runCl
   let { argv: args, statement } = takePrincipal(argv as string[]);
   let note = "";
   if (request.caller?.kind !== "owner") {
-    const fixed = provenSource(args, String(request.caller?.agent ?? ""), statement, verify);
+    const fixed = provenSource(args, String(request.caller?.agent ?? ""), statement, verify, callerHouse(request.caller));
     if (fixed) ({ argv: args, why: note } = fixed);
   }
   if (!args.length) return refuse(400, `argv is a list of 1 to ${MAX_ARGS} strings`);
