@@ -86,6 +86,30 @@ describe("transactional Tasks source changes", () => {
     store.close();
   });
 
+  it("drains a backlog over core's 4 MiB budget in byte-bounded pages, preserving source transaction ids", () => {
+    const { store, run, pull } = fixture();
+    const start = pull();
+    const text = "é".repeat(2500); // count UTF-8 bytes, not JS characters
+    run({ op: "import", tasks: Array.from({ length: 1000 }, (_, i) => ({ id: `old-${i}`, title: `Imported ${i}`, goal: text, type: "task", status: "open", priority: 2, createdAt: "2026-11-10T00:00:00Z", createdBy: "art", comments: [] })) });
+    let cursor = { rev: start.head, txn: start.txn };
+    const changes: any[] = [];
+    let pages = 0;
+    for (; pages < 10; pages++) {
+      const page = pull(cursor.rev, cursor.txn);
+      expect(Buffer.byteLength(JSON.stringify({ "tasks/task": page }), "utf8")).toBeLessThan(4 * 1024 * 1024);
+      changes.push(...page.changes);
+      if (!page.more) break;
+      const last = page.changes.at(-1);
+      cursor = { rev: last.rev, txn: last.txn };
+    }
+    expect(pages).toBeGreaterThan(0);
+    expect(changes).toHaveLength(1000);
+    expect(new Set(changes.map((c) => c.id)).size).toBe(1000);
+    expect(new Set(changes.map((c) => c.txn)).size).toBe(1);
+    expect(changes.at(-1).rev).toBe(1000);
+    store.close();
+  });
+
   it("upgrades an existing store and exposes the log through the CLI without inventing historical changes", () => {
     const { path, store, run } = fixture();
     run({ op: "create", title: "Existing task" });

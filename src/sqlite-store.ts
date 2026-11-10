@@ -194,15 +194,29 @@ export class SqliteStore {
       if (held !== cursor.txn) return { "tasks/task": { reset: true } };
       const limit = typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 1000) : 1000;
       const rows = this.db.prepare("SELECT rev, txn, id, record FROM collection_changes WHERE rev > ? ORDER BY rev LIMIT ?").all(cursor.rev, limit + 1) as Array<{ rev: number; txn: string; id: string; record: string | null }>;
-      // End on a transaction boundary unless the first transaction itself is larger than the page.
-      let end = Math.min(limit, rows.length);
-      if (rows.length > limit && rows[end - 1].txn === rows[end].txn) {
+      // Core's offer accepts at most 4 MiB. Leave room for its envelope and paginate by
+      // serialized UTF-8 bytes as well as count (kept text can be much larger than a task title).
+      const changes: Array<Record<string, unknown>> = [];
+      let bytes = 0;
+      for (const r of rows.slice(0, limit)) {
+        const change = { op: r.record === null ? "delete" : "upsert", id: r.id, rev: r.rev, txn: r.txn,
+          ...(r.record === null ? {} : { audience: { owners: true }, record: loggedRecord(JSON.parse(r.record) as TaskRecord, owner) }) };
+        const size = Buffer.byteLength(JSON.stringify(change), "utf8") + 1;
+        if (bytes + size > 3 * 1024 * 1024) {
+          if (!changes.length) throw new Error("collection change exceeds byte budget");
+          break;
+        }
+        changes.push(change);
+        bytes += size;
+      }
+      // End on a transaction boundary unless the first transaction itself is larger than a page.
+      let end = changes.length;
+      if (rows.length > end && end && rows[end - 1].txn === rows[end].txn) {
         let boundary = end;
         while (boundary > 0 && rows[boundary - 1].txn === rows[end].txn) boundary--;
         if (boundary) end = boundary;
       }
-      const changes = rows.slice(0, end).map((r) => ({ op: r.record === null ? "delete" : "upsert", id: r.id, rev: r.rev, txn: r.txn,
-        ...(r.record === null ? {} : { audience: { owners: true }, record: loggedRecord(JSON.parse(r.record) as TaskRecord, owner) }) }));
+      changes.length = end;
       return { "tasks/task": { head: rev, txn, changes, more: rows.length > end } };
     })();
   }
