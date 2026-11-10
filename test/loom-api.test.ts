@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -133,6 +133,8 @@ describe("taskstore api: where a task came from (t-2117)", () => {
     rt = join(mkdtempSync(join(tmpdir(), "ts-rt-")), "rt");
     writeFileSync(rt, `#!/bin/sh
 [ "$1" = "--verify" ] || exit 2
+[ "$2" = "--house" ] && [ "$3" = "h-elsewhere" ] && { echo '{"ok":false}'; exit 1; }
+[ -n "$TS_RT_RECORD" ] && echo "$*" >> "$TS_RT_RECORD"
 s=$(cat)
 case "$s" in S:*:cv-*) a=\${s#S:}; a=\${a%%:*}; c=\${s##*:}; printf '{"ok":true,"agent":"%s","conversation":"%s"}' "$a" "$c";; *) echo '{"ok":false}'; exit 1;; esac
 `);
@@ -169,6 +171,30 @@ case "$s" in S:*:cv-*) a=\${s#S:}; a=\${a%%:*}; c=\${s##*:}; printf '{"ok":true,
     // Other kinds of source aren't a thread's: as before.
     const gh = run(["create", "from an issue", "--source", "github:acme/app#3"], art, env());
     expect(source(gh.body)).toBe("github:acme/app#3");
+  });
+
+  it("tells the runtime the caller's house, and a statement shown to another house's body proves nothing (t-2137)", () => {
+    const record = join(mkdtempSync(join(tmpdir(), "ts-rec-")), "argv");
+    const e = { ...env(), TS_RT_RECORD: record };
+    const said = () => (existsSync(record) ? readFileSync(record, "utf8").trim().split("\n") : []);
+    const r = run(["create", "made here", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, house: "h-7" }, e);
+    expect(source(r.body)).toBe(mine);
+    expect(said().at(-1)).toBe("--verify --house h-7");
+    run(["create", "no house", "--source", mine, "--principal", "S:art:cv-0123456789ab"], art, e);
+    expect(said().at(-1)).toBe("--verify --house -");
+    const away = run(["create", "from elsewhere", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, house: "h-elsewhere" }, e);
+    expect(away.body.exit, String(away.body.stderr)).toBe(0);
+    expect(source(away.body)).toBeUndefined();
+    // A house id that isn't one, or "-": never verified, never read as no house.
+    const n = said().length;
+    for (const house of ["h-7 --x", "-", "", 7]) {
+      const bad = run(["create", "odd house", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, house }, e);
+      expect(source(bad.body)).toBeUndefined();
+    }
+    // A service's houseless token (a bridge on loom's machine) is no body's.
+    const svc = run(["create", "from a bridge", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, service: "slack" }, e);
+    expect(source(svc.body)).toBeUndefined();
+    expect(said().length).toBe(n);
   });
 
   it("a principal typed mid-command is the body's own words: the CLI refuses it", () => {
