@@ -302,9 +302,36 @@ if (verb === "api") {
       input: "", encoding: "utf8", timeout: 12_000, maxBuffer: 32 * 1024 * 1024,
     });
     return { exit: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.error ? String(r.error) : (r.stderr ?? "") };
-  });
+  }, verifyStatement);
   writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
+}
+
+/**
+ * The runtime's word on a principal statement (t-2117): `<TASKSTORE_PRINCIPAL> --verify` with the statement on stdin
+ * (default `loom runtime principal`: `loom` on PATH, else ~/.local/bin/loom). Its answer only with exit 0 and
+ * `ok: true`; the statement itself is never logged.
+ */
+function verifyStatement(statement: string): { agent?: unknown; conversation?: unknown } | null {
+  const named = process.env.TASKSTORE_PRINCIPAL?.trim();
+  let cmd: string[];
+  if (named) cmd = named.split(/\s+/);
+  else {
+    const onPath = (process.env.PATH ?? "").split(":").filter(Boolean).map((d) => join(d, "loom")).find((p) => existsSync(p));
+    const home = join(homedir(), ".local", "bin", "loom");
+    cmd = [onPath ?? (existsSync(home) ? home : "loom"), "runtime", "principal"];
+  }
+  const r = spawnSync(cmd[0], [...cmd.slice(1), "--verify"], {
+    input: statement, encoding: "utf8", timeout: 10_000,
+    env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "HOUSE_ID" && k !== "LOOM_BODY_CONVERSATION")),
+  });
+  if (r.error || r.status !== 0) return null;
+  try {
+    const v = JSON.parse(r.stdout || "{}");
+    return v && typeof v === "object" && v.ok === true ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // `bundle export|import`: the tasks piece's part of loom's household bundle
