@@ -60,6 +60,23 @@ describe("manifest", () => {
       { op: "update", id: "t-1", set: { assignee: "jonathan", ask: "Use the external drive for backups?", ifYes: "I use the drive.", ifNo: "I keep the existing backup." } }]);
     expect(manifest({ ...view(s), agents: ["art"] }).agents.art.jobs[0]).toMatchObject({ id: "t-1", status: "waiting" });
   });
+  it("attributes asks to the answer recipient and publishes their own why and outcome lines", () => {
+    const s = state([{ op: "create", title: "Choose the backup", goal: "Backups have an agreed destination.", why: "The destination needs a decision." },
+      { op: "update", id: "t-1", actor: "mark", set: { assignee: "jonathan", ask: "Use the external drive for backups?", ifYes: "I use the drive.", ifNo: "I keep the existing backup." } }]);
+    const v = { ...view(s), agents: ["art", "mark"] };
+    expect(manifest(v).asks[0]).toMatchObject({ agent: "mark", why: "The destination needs a decision.", if_yes: "I use the drive.", if_no: "I keep the existing backup." });
+    const result = checkAct(v, { action: "answer", fields: { id: "t-1", answer: "yes" } });
+    expect(result).toMatchObject({ ok: true, to: manifest(v).asks[0].agent });
+    const legacy = { ...v, tasks: [{ ...s.tasks[0], askedBy: undefined }] };
+    expect(manifest(legacy).asks[0].agent).toBe("art");
+    expect(manifest({ ...legacy, agents: ["mark", "art"] }).asks[0].agent).toBe("mark");
+  });
+  it("keeps ask why and outcomes within the core Ask schema’s 300-character limit", () => {
+    const s = state([{ op: "create", title: "Choose the backup", goal: "Backups have an agreed destination.", why: "x".repeat(301) },
+      { op: "update", id: "t-1", set: { assignee: "jonathan", ask: "Use the spare drive?", ifYes: "y".repeat(301), ifNo: "n".repeat(301) } }]);
+    const a = manifest(view(s)).asks[0];
+    for (const text of [a.why, a.if_yes, a.if_no]) { expect(text).toHaveLength(300); expect(text?.endsWith("…")).toBe(true); }
+  });
   it("reports all open assigned or agent-created work as backlog without claiming it is running", () => {
     const v = { ...view(base()), agents: ["art", "mark"] };
     expect(manifest(v).agents.art.jobs.map((j) => [j.id, j.status])).toEqual([["t-1", "backlog"], ["t-2", "backlog"], ["t-6", "backlog"]]);
@@ -73,8 +90,8 @@ describe("manifest", () => {
     expect(m.tab).toEqual({ label: "Tasks" });
     expect(m.tile).toEqual({ label: "Work", value: "2 in progress", detail: "1 ready, urgent or high", tone: "warn", page: "" });
     expect(m.asks.map(({ at, ...a }) => a)).toEqual([
-      { text: "owner doing", meta: "Normal priority · t-4", page: "task/t-4", label: "Open", kind: "todo", attention: false },
-      { text: "pick the key recovery", meta: "Low priority · t-3", page: "task/t-3", label: "Open", kind: "todo", attention: false },
+      { text: "owner doing", agent: "art", meta: "Normal priority · t-4", page: "task/t-4", label: "Open", kind: "todo", attention: false },
+      { text: "pick the key recovery", agent: "art", meta: "Low priority · t-3", page: "task/t-3", label: "Open", kind: "todo", attention: false },
     ]);
     // Each carries when it was started, else filed: loom shows its age on the card.
     expect(m.asks.every((a) => typeof a.at === "string" && !Number.isNaN(Date.parse(a.at)))).toBe(true);
@@ -461,7 +478,7 @@ describe("taskstore ui (the CLI verbs)", () => {
   it("ui --json is the v2 manifest", () => {
     const m = json(run(["ui", "--json"], "", { TASKSTORE_OWNER: "jonathan" }));
     expect(m).toMatchObject({ v: 2, tab: { label: "Tasks" }, tile: { value: "1 in progress", detail: "0 ready, urgent or high" } });
-    expect(m.asks).toEqual([{ text: "Is this yours?", meta: "Normal priority · t-2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "todo", attention: false }]);
+    expect(m.asks).toEqual([{ text: "Is this yours?", agent: "art", meta: "Normal priority · t-2", page: "task/t-2", label: "Open", at: expect.any(String), kind: "todo", attention: false }]);
   });
 
   it("ui page --json answers both pages, and Not found for junk", () => {

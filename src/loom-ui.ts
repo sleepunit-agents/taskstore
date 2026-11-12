@@ -182,6 +182,13 @@ export function manifest(v: UiView) {
     // request); a task with no ask yet shows its title and goal.
     asks: ownersCall(v).slice(0, MAX_ASKS).map((t) => ({
       text: clip(t.ask?.trim() || t.title, TITLE_MAX),
+      // Match the recipient of answerForm/checkAct, so core folds only this agent's digest ask.
+      agent: agentFor(v, t),
+      ...(t.ask?.trim() ? {
+        ...(t.why?.trim() ? { why: clip(t.why.trim(), TITLE_MAX) } : {}),
+        ...(t.ifYes?.trim() ? { if_yes: clip(t.ifYes.trim(), TITLE_MAX) } : {}),
+        ...(t.ifNo?.trim() ? { if_no: clip(t.ifNo.trim(), TITLE_MAX) } : {}),
+      } : {}),
       meta: clip(t.ask?.trim() ? (t.why?.trim() || t.goal?.trim() || `${priorityMeta(t.priority)} · ${t.id}`) : (t.goal?.trim() || `${priorityMeta(t.priority)} · ${t.id}`)),
       ...taskLink(t.id),
       label: "Open",
