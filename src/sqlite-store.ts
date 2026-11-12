@@ -7,7 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { keptRecords, loggedRecord, type TaskRecord } from "./collections.js";
 import Database from "better-sqlite3";
-import { writeFileSync, renameSync, appendFileSync } from "node:fs";
+import { writeFileSync, renameSync, appendFileSync, existsSync, statSync, truncateSync } from "node:fs";
 import { apply, emptyState, type Command, type Result, type StoreState, type Task, type Link } from "./core.js";
 
 const MUTATION_OPS = new Set([
@@ -251,10 +251,14 @@ export class SqliteStore {
   }
 
   /** Passive append-only interactions log: one mutation record per line. */
-  private appendInteractions(entries: InteractionRecord[]): void {
-    if (entries.length === 0) return;
+  private appendInteractions(entries: InteractionRecord[]): () => void {
+    if (entries.length === 0) return () => {};
     const path = this.dbPath.replace(/\.db$/, "") + ".interactions.jsonl";
-    appendFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const bytes = existsSync(path) ? statSync(path).size : 0;
+    const rollback = () => truncateSync(path, bytes);
+    try { appendFileSync(path, entries.map((e) => JSON.stringify(e)).join("\n") + "\n"); }
+    catch (err) { if (existsSync(path)) rollback(); throw err; }
+    return rollback;
   }
 
   /**
@@ -299,8 +303,9 @@ export class SqliteStore {
       this.persist(state);
       const changed = this.logCollections(prev, state);
       const publishMirror = this.stageMirror(state);
-      this.appendInteractions(buildInteractions(command, prev, state, result));
-      publishMirror();
+      const rollbackInteractions = this.appendInteractions(buildInteractions(command, prev, state, result));
+      try { publishMirror(); }
+      catch (err) { rollbackInteractions(); throw err; }
       return { result, changed };
     });
     const committed = write.immediate();

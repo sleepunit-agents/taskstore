@@ -54,6 +54,11 @@ describe("transactional Tasks source changes", () => {
     expect(fresh.collectionChanged).toBe(true);
     const delta = fresh.collectionChanges({ "tasks/task": { rev: before.head, txn: before.txn } }, "jonathan")["tasks/task"] as any;
     expect(delta.changes).toHaveLength(1);
+    const state = fresh.load();
+    expect(delta.changes[0]).toMatchObject({ op: "upsert", id: "t-1", rev: before.head + 1,
+      record: loggedRecord(keptRecords(state.tasks, state.links).get("t-1")!, "jonathan") });
+    expect(delta.head).toBe(before.head + 1);
+    expect(delta.changes[0].txn).not.toBe(before.txn);
     expect(JSON.stringify(delta)).not.toContain("Heavy changed text");
     fresh.close();
     const noop = new SqliteStore(path);

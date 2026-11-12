@@ -107,6 +107,9 @@ describe('CLI collection hints', () => {
     run('create', 'Before rollback');
     const db = new Database(dbPath);
     // Mirror rename is after collection logging, inside the write transaction.
+    const log = dbPath.replace(/\.db$/, '') + '.interactions.jsonl';
+    const beforeInteractions = readFileSync(log, 'utf8');
+    const beforeChanges = db.prepare('SELECT * FROM collection_changes').all();
     const mirror = dbPath.replace(/\.db$/, '') + '.export.jsonl';
     renameSync(mirror, mirror + '.saved'); mkdirSync(mirror);
     const n = hints().length;
@@ -114,6 +117,8 @@ describe('CLI collection hints', () => {
     expect(run('update', 't-1', '--title', 'Rolled back').code).toBe(1);
     expect(hints()).toHaveLength(n);
     expect(run('show', 't-1').result.task.title).toBe('Before rollback');
+    expect(db.prepare('SELECT * FROM collection_changes').all()).toEqual(beforeChanges);
+    expect(readFileSync(log, 'utf8')).toBe(beforeInteractions);
     db.close();
   });
 
