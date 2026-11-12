@@ -42,6 +42,30 @@ describe("transactional Tasks source changes", () => {
     store.close();
   });
 
+  it("signals heavy description changes without retaining heavy text, and latches only committed changes", () => {
+    const { path, store, run, pull } = fixture();
+    run({ op: "create", title: "Searchable" });
+    const before = pull(); store.close();
+    const fresh = new SqliteStore(path);
+    expect(fresh.collectionChanged).toBe(false);
+    fresh.run({ op: "update", id: "t-1", set: { description: "Heavy changed text" }, actor: "art", at: "2026-11-10T01:00:00Z" });
+    expect(fresh.collectionChanged).toBe(true);
+    fresh.run({ op: "show", id: "t-1" });
+    expect(fresh.collectionChanged).toBe(true);
+    const delta = fresh.collectionChanges({ "tasks/task": { rev: before.head, txn: before.txn } }, "jonathan")["tasks/task"] as any;
+    expect(delta.changes).toHaveLength(1);
+    expect(JSON.stringify(delta)).not.toContain("Heavy changed text");
+    fresh.close();
+    const noop = new SqliteStore(path);
+    noop.run({ op: "update", id: "t-1", set: { description: "Heavy changed text" }, actor: "art", at: "2026-11-10T02:00:00Z" });
+    expect(noop.collectionChanged).toBe(false);
+    const db = new Database(path);
+    db.exec("CREATE TRIGGER reject_change BEFORE INSERT ON collection_changes BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    expect(() => noop.run({ op: "update", id: "t-1", set: { title: "Rolled back" }, actor: "art", at: "2026-11-10T03:00:00Z" })).toThrow();
+    expect(noop.collectionChanged).toBe(false);
+    db.close(); noop.close();
+  });
+
   it("logs every dependent with the same txn and honors page boundaries", () => {
     const { store, run, pull } = fixture();
     run({ op: "create", title: "Blocker" });

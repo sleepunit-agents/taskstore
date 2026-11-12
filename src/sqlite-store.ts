@@ -133,7 +133,7 @@ function buildInteractions(
 const BUSY_TIMEOUT_MS = 30_000;
 
 export class SqliteStore {
-  /** Whether the last run committed changes visible to task collections. */
+  /** Whether any run on this store committed changes visible to task collections. */
   collectionChanged = false;
   private db: Database.Database;
 
@@ -168,16 +168,18 @@ export class SqliteStore {
     this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('collection_origin', ?)").run(randomBytes(16).toString("hex"));
   }
 
-  /** Kept-field differences include dependents whose blocker/parent changed in this same write. */
+  /** Kept-field differences include dependents. Heavy description changes signal a requery without logging text. */
   private logCollections(prev: StoreState, state: StoreState): boolean {
     let changed = false;
     const was = keptRecords(prev.tasks, prev.links);
     const next = keptRecords(state.tasks, state.links);
+    const descriptions = new Map(prev.tasks.map(t => [t.id, t.description]));
+    const changedDescriptions = new Set(state.tasks.filter(t => t.description !== descriptions.get(t.id)).map(t => t.id));
     const txn = randomBytes(16).toString("hex");
     const insert = this.db.prepare("INSERT INTO collection_changes (txn, id, record) VALUES (?, ?, ?)");
     for (const [id, record] of next) {
       const json = JSON.stringify(record);
-      if (json !== JSON.stringify(was.get(id))) { insert.run(txn, id, json); changed = true; }
+      if (json !== JSON.stringify(was.get(id)) || changedDescriptions.has(id)) { insert.run(txn, id, json); changed = true; }
     }
     for (const id of was.keys()) if (!next.has(id)) { insert.run(txn, id, null); changed = true; }
     return changed;
@@ -289,7 +291,6 @@ export class SqliteStore {
    * throws, the transaction rolls back, and the caller never sees ok.
    */
   run(command: Command): Result {
-    this.collectionChanged = false;
     if (!MUTATION_OPS.has(command.op)) return apply(this.load(), command).result;
     const write = this.db.transaction(() => {
       const prev = this.load();
@@ -303,7 +304,7 @@ export class SqliteStore {
       return { result, changed };
     });
     const committed = write.immediate();
-    this.collectionChanged = committed.changed;
+    this.collectionChanged ||= committed.changed;
     return committed.result;
   }
 

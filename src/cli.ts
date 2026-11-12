@@ -512,7 +512,9 @@ if (verb === "ui") {
           : { ok: true, message: `${check.id} is open again.`, page: `task/${check.id}` };
     }
   }
+  const changed = uiStore.collectionChanged;
   uiStore.close();
+  announceCollectionChange(changed);
   // Written in full, then exit: the rest of this file is the command path.
   writeAll(JSON.stringify(out) + "\n");
   process.exit(0);
@@ -671,15 +673,7 @@ if (plainCheck.refuse) {
 }
 const collectionChanged = store.collectionChanged;
 store.close();
-// Public hint only, after commit. No shell, token handling or dependency on loom's
-// availability: a missing, failing or stuck loom cannot change the write result.
-if (collectionChanged) {
-  try {
-    spawnSync("loom", ["collections", "nudge", "tasks/task"], {
-      stdio: "ignore", timeout: 1500, killSignal: "SIGKILL",
-    });
-  } catch { /* best effort; normal collection repair still applies */ }
-}
+announceCollectionChange(collectionChanged);
 
 /**
  * The plain-words policy over a create or update. The owner's task (assigned
@@ -781,3 +775,15 @@ const dupLink = command.op === "link" && result.ok === true && result.linked !==
 // better-sqlite3 is synchronous, so the process still ends as soon as stdout
 // is flushed — with the whole output and the same four statuses.
 process.exitCode = result.ok !== true ? 1 : missedUnlink || dupLink ? 3 : 0;
+
+// Public hint only, after commit. No shell, token handling or dependency on loom's
+// availability: a missing, failing or stuck loom cannot change the write result.
+function announceCollectionChange(changed: boolean): void {
+  if (!changed) return;
+  try {
+    spawnSync("loom", ["collections", "nudge", "tasks/task"], {
+      stdio: "ignore", timeout: 1500, killSignal: "SIGKILL",
+    });
+  } catch { /* best effort; normal collection repair still applies */ }
+}
+
