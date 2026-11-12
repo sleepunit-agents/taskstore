@@ -133,6 +133,8 @@ function buildInteractions(
 const BUSY_TIMEOUT_MS = 30_000;
 
 export class SqliteStore {
+  /** Whether the last run committed changes visible to task collections. */
+  collectionChanged = false;
   private db: Database.Database;
 
   constructor(private dbPath: string) {
@@ -167,16 +169,18 @@ export class SqliteStore {
   }
 
   /** Kept-field differences include dependents whose blocker/parent changed in this same write. */
-  private logCollections(prev: StoreState, state: StoreState): void {
+  private logCollections(prev: StoreState, state: StoreState): boolean {
+    let changed = false;
     const was = keptRecords(prev.tasks, prev.links);
     const next = keptRecords(state.tasks, state.links);
     const txn = randomBytes(16).toString("hex");
     const insert = this.db.prepare("INSERT INTO collection_changes (txn, id, record) VALUES (?, ?, ?)");
     for (const [id, record] of next) {
       const json = JSON.stringify(record);
-      if (json !== JSON.stringify(was.get(id))) insert.run(txn, id, json);
+      if (json !== JSON.stringify(was.get(id))) { insert.run(txn, id, json); changed = true; }
     }
-    for (const id of was.keys()) if (!next.has(id)) insert.run(txn, id, null);
+    for (const id of was.keys()) if (!next.has(id)) { insert.run(txn, id, null); changed = true; }
+    return changed;
   }
 
   /** Core-only source feed. Cursor identity detects restored/replaced histories, including re-grown ones. */
@@ -285,19 +289,22 @@ export class SqliteStore {
    * throws, the transaction rolls back, and the caller never sees ok.
    */
   run(command: Command): Result {
+    this.collectionChanged = false;
     if (!MUTATION_OPS.has(command.op)) return apply(this.load(), command).result;
     const write = this.db.transaction(() => {
       const prev = this.load();
       const { result, state } = apply(prev, command);
-      if (result.ok !== true) return result; // nothing changes, nothing written
+      if (result.ok !== true) return { result, changed: false }; // nothing changes, nothing written
       this.persist(state);
-      this.logCollections(prev, state);
+      const changed = this.logCollections(prev, state);
       const publishMirror = this.stageMirror(state);
       this.appendInteractions(buildInteractions(command, prev, state, result));
       publishMirror();
-      return result;
+      return { result, changed };
     });
-    return write.immediate();
+    const committed = write.immediate();
+    this.collectionChanged = committed.changed;
+    return committed.result;
   }
 
   close(): void {

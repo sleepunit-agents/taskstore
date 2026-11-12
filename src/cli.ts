@@ -669,7 +669,17 @@ if (plainCheck.refuse) {
     for (const w of plainCheck.warnings) console.error(`taskstore: warning: ${w}`);
   }
 }
+const collectionChanged = store.collectionChanged;
 store.close();
+// Public hint only, after commit. No shell, token handling or dependency on loom's
+// availability: a missing, failing or stuck loom cannot change the write result.
+if (collectionChanged) {
+  try {
+    spawnSync("loom", ["collections", "nudge", "tasks/task"], {
+      stdio: "ignore", timeout: 1500, killSignal: "SIGKILL",
+    });
+  } catch { /* best effort; normal collection repair still applies */ }
+}
 
 /**
  * The plain-words policy over a create or update. The owner's task (assigned
