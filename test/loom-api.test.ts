@@ -195,7 +195,8 @@ case "$s" in S:*:cv-*) a=\${s#S:}; a=\${a%%:*}; c=\${s##*:}; printf '{"ok":true,
     const svc = run(["create", "from a bridge", "--source", mine, "--principal", "S:art:cv-0123456789ab"], { ...art, service: "slack" }, e);
     expect(source(svc.body)).toBeUndefined();
     expect(said().length).toBe(n);
-  });
+    // Several nested CLI processes prove authority; elapsed time is not an assertion here.
+  }, 15_000);
 
   it("a principal typed mid-command is the body's own words: the CLI refuses it", () => {
     const r = run(["create", "x", "--principal", "S:art:cv-0123456789ab", "--source", mine], art, env());
